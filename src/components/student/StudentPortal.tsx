@@ -1,0 +1,150 @@
+import React, { useEffect, useState } from 'react';
+import { useCBT } from '../../context/CBTContext';
+import { ExamResultView } from './ExamResultView';
+import { ExamWorkspace } from './ExamWorkspace';
+import { PreFlightCheck } from './PreFlightCheck';
+import { StudentExamDashboard } from './StudentExamDashboard';
+
+type StudentPortalView = 'dashboard' | 'preflight' | 'workspace' | 'result';
+
+export function StudentPortal() {
+  const { db, session, logout, startOrResumeAttempt } = useCBT();
+  const [view, setView] = useState<StudentPortalView>('dashboard');
+  const [selectedPackageId, setSelectedPackageId] = useState<string | undefined>(
+    session?.packageId
+  );
+
+  const student = db.students.find((s) => s.id === session?.userId);
+  const activePackageId = selectedPackageId || session?.packageId;
+  const examPackage = db.packages.find((p) => p.id === activePackageId);
+  const existingAttempt =
+    student && examPackage
+      ? db.attempts.find(
+          (a) => a.studentId === student.id && a.packageId === examPackage.id
+        )
+      : undefined;
+
+  useEffect(() => {
+    if (session?.packageId && !selectedPackageId) {
+      setSelectedPackageId(session.packageId);
+    }
+  }, [selectedPackageId, session?.packageId]);
+
+  useEffect(() => {
+    if (view === 'workspace' && student && examPackage && !existingAttempt) {
+      startOrResumeAttempt(student.id, examPackage.id);
+    }
+  }, [examPackage, existingAttempt, startOrResumeAttempt, student, view]);
+
+  // Auto-transition from active workspace to result view once submitted or locked
+  useEffect(() => {
+    if (
+      view === 'workspace' &&
+      existingAttempt &&
+      (existingAttempt.status === 'completed' || existingAttempt.status === 'locked')
+    ) {
+      setView('result');
+    }
+  }, [existingAttempt, view]);
+
+  if (!student) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 p-6 text-center space-y-4">
+        <p className="text-sm text-slate-600 dark:text-slate-400">
+          Sesi peserta tidak valid atau data siswa tidak ditemukan.
+        </p>
+        <button
+          type="button"
+          onClick={logout}
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
+        >
+          Kembali ke Halaman Login
+        </button>
+      </div>
+    );
+  }
+
+  if (view === 'dashboard' || !examPackage) {
+    return (
+      <StudentExamDashboard
+        student={student}
+        activeSessionPackageId={session?.packageId}
+        onSelectExamForStart={(packageId) => {
+          setSelectedPackageId(packageId);
+          setView('preflight');
+        }}
+        onSelectExamForResult={(packageId) => {
+          setSelectedPackageId(packageId);
+          setView('result');
+        }}
+        onLogout={logout}
+      />
+    );
+  }
+
+  const pkgQuestions = db.questions.filter((q) => q.packageId === examPackage.id);
+
+  // If the selected exam is already completed or locked, show result view with option to return to dashboard
+  if (
+    view === 'result' ||
+    (existingAttempt &&
+      (existingAttempt.status === 'completed' || existingAttempt.status === 'locked'))
+  ) {
+    if (!existingAttempt) {
+      return (
+        <StudentExamDashboard
+          student={student}
+          activeSessionPackageId={session?.packageId}
+          onSelectExamForStart={(packageId) => {
+            setSelectedPackageId(packageId);
+            setView('preflight');
+          }}
+          onSelectExamForResult={(packageId) => {
+            setSelectedPackageId(packageId);
+            setView('result');
+          }}
+          onLogout={logout}
+        />
+      );
+    }
+
+    return (
+      <ExamResultView
+        attempt={existingAttempt}
+        examPackage={examPackage}
+        questions={pkgQuestions}
+        onBackToDashboard={() => setView('dashboard')}
+        onLogout={logout}
+      />
+    );
+  }
+
+  if (view === 'preflight') {
+    return (
+      <PreFlightCheck
+        student={student}
+        examPackage={examPackage}
+        existingAttempt={existingAttempt}
+        questionCount={pkgQuestions.length}
+        onStartExam={() => {
+          startOrResumeAttempt(student.id, examPackage.id);
+          setView('workspace');
+        }}
+        onBackToDashboard={() => setView('dashboard')}
+        onLogout={logout}
+      />
+    );
+  }
+
+  if (!existingAttempt) {
+    return null;
+  }
+
+  return (
+    <ExamWorkspace
+      attempt={existingAttempt}
+      examPackage={examPackage}
+      questions={pkgQuestions}
+    />
+  );
+}

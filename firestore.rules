@@ -1,0 +1,566 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 0: Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Global Hardened Primitives
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Path-based UID ownership matcher supporting both `{uid}` and `cbt_{uid}` snapshot IDs
+    function isOwnSnapshotPath(snapshotId) {
+      return isVerifiedUser() && (
+        snapshotId == request.auth.uid ||
+        snapshotId == 'cbt_' + request.auth.uid
+      );
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'tamtowiyahya65@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isBoundedStringList(arr, maxItems, maxItemLen) {
+      return arr is list &&
+        arr.size() <= maxItems &&
+        (arr.size() == 0 || (arr[0] is string && arr[0].size() >= 1 && arr[0].size() <= maxItemLen));
+    }
+
+    // =========================================================================
+    // Validation Blueprints (Pillar 2 — Anti-Update-Gap)
+    // =========================================================================
+    function isValidAdminProfile(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'displayName', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.uid == request.auth.uid &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSchoolPortalDoc(data) {
+      return data.keys().hasAll([
+          'updatedByUid', 'schoolName', 'academicYear', 'announcementTitle',
+          'announcementText', 'announcementActive', 'themeMode', 'themeAccent',
+          'classes', 'linkedSpreadsheetId', 'linkedSpreadsheetName',
+          'appsScriptWebAppUrl', 'spreadsheetUrl',
+          'studentCount', 'teacherCount', 'packageCount', 'questionCount',
+          'attemptCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'updatedByUid', 'schoolName', 'academicYear', 'announcementTitle',
+          'announcementText', 'announcementActive', 'themeMode', 'themeAccent',
+          'classes', 'linkedSpreadsheetId', 'linkedSpreadsheetName',
+          'appsScriptWebAppUrl', 'spreadsheetUrl',
+          'studentCount', 'teacherCount', 'packageCount', 'questionCount',
+          'attemptCount', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.updatedByUid) &&
+        data.updatedByUid == request.auth.uid &&
+        data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 160 &&
+        data.academicYear is string && data.academicYear.size() >= 1 && data.academicYear.size() <= 80 &&
+        data.announcementTitle is string && data.announcementTitle.size() <= 200 &&
+        data.announcementText is string && data.announcementText.size() <= 2000 &&
+        data.announcementActive is bool &&
+        data.themeMode in ['light', 'dark'] &&
+        data.themeAccent in ['indigo', 'blue', 'emerald', 'amber', 'rose', 'teal'] &&
+        isBoundedStringList(data.classes, 100, 40) &&
+        data.linkedSpreadsheetId is string && data.linkedSpreadsheetId.size() <= 200 &&
+        data.linkedSpreadsheetName is string && data.linkedSpreadsheetName.size() <= 200 &&
+        data.appsScriptWebAppUrl is string && data.appsScriptWebAppUrl.size() <= 400 &&
+        data.spreadsheetUrl is string && data.spreadsheetUrl.size() <= 400 &&
+        data.studentCount is number && data.studentCount >= 0 && data.studentCount <= 100000 &&
+        data.teacherCount is number && data.teacherCount >= 0 && data.teacherCount <= 10000 &&
+        data.packageCount is number && data.packageCount >= 0 && data.packageCount <= 10000 &&
+        data.questionCount is number && data.questionCount >= 0 && data.questionCount <= 100000 &&
+        data.attemptCount is number && data.attemptCount >= 0 && data.attemptCount <= 500000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCbtSnapshot(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'schoolName', 'academicYear', 'announcementTitle',
+          'announcementText', 'announcementActive', 'themeMode', 'themeAccent',
+          'classes', 'linkedSpreadsheetId', 'linkedSpreadsheetName',
+          'appsScriptWebAppUrl', 'spreadsheetUrl',
+          'studentCount', 'teacherCount', 'packageCount', 'questionCount',
+          'attemptCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerUid', 'schoolName', 'academicYear', 'announcementTitle',
+          'announcementText', 'announcementActive', 'themeMode', 'themeAccent',
+          'classes', 'linkedSpreadsheetId', 'linkedSpreadsheetName',
+          'appsScriptWebAppUrl', 'spreadsheetUrl',
+          'studentCount', 'teacherCount', 'packageCount', 'questionCount',
+          'attemptCount', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.ownerUid) &&
+        (data.ownerUid == request.auth.uid || isBootstrappedAdmin()) &&
+        data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 160 &&
+        data.academicYear is string && data.academicYear.size() >= 1 && data.academicYear.size() <= 80 &&
+        data.announcementTitle is string && data.announcementTitle.size() <= 200 &&
+        data.announcementText is string && data.announcementText.size() <= 2000 &&
+        data.announcementActive is bool &&
+        data.themeMode in ['light', 'dark'] &&
+        data.themeAccent in ['indigo', 'blue', 'emerald', 'amber', 'rose', 'teal'] &&
+        isBoundedStringList(data.classes, 100, 40) &&
+        data.linkedSpreadsheetId is string && data.linkedSpreadsheetId.size() <= 200 &&
+        data.linkedSpreadsheetName is string && data.linkedSpreadsheetName.size() <= 200 &&
+        data.appsScriptWebAppUrl is string && data.appsScriptWebAppUrl.size() <= 400 &&
+        data.spreadsheetUrl is string && data.spreadsheetUrl.size() <= 400 &&
+        data.studentCount is number && data.studentCount >= 0 && data.studentCount <= 100000 &&
+        data.teacherCount is number && data.teacherCount >= 0 && data.teacherCount <= 10000 &&
+        data.packageCount is number && data.packageCount >= 0 && data.packageCount <= 10000 &&
+        data.questionCount is number && data.questionCount >= 0 && data.questionCount <= 100000 &&
+        data.attemptCount is number && data.attemptCount >= 0 && data.attemptCount <= 500000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStudentDoc(data, snapshotId) {
+      return data.keys().hasAll([
+          'ownerUid', 'snapshotId', 'nisn', 'name', 'className',
+          'active', 'blockReason', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerUid', 'snapshotId', 'nisn', 'name', 'className',
+          'active', 'blockReason', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.ownerUid) &&
+        (data.ownerUid == request.auth.uid || isBootstrappedAdmin()) &&
+        isValidId(data.snapshotId) &&
+        data.snapshotId == snapshotId &&
+        data.nisn is string && data.nisn.size() >= 1 && data.nisn.size() <= 32 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 160 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.active is bool &&
+        data.blockReason is string && data.blockReason.size() <= 240 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTeacherDoc(data, snapshotId) {
+      return data.keys().hasAll([
+          'ownerUid', 'snapshotId', 'username', 'nip', 'name',
+          'subjects', 'classes', 'active', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerUid', 'snapshotId', 'username', 'nip', 'name',
+          'subjects', 'classes', 'active', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.ownerUid) &&
+        (data.ownerUid == request.auth.uid || isBootstrappedAdmin()) &&
+        isValidId(data.snapshotId) &&
+        data.snapshotId == snapshotId &&
+        data.username is string && data.username.size() >= 1 && data.username.size() <= 80 &&
+        data.nip is string && data.nip.size() <= 64 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 160 &&
+        isBoundedStringList(data.subjects, 30, 80) &&
+        isBoundedStringList(data.classes, 50, 40) &&
+        data.active is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidExamPackageDoc(data, snapshotId) {
+      return data.keys().hasAll([
+          'ownerUid', 'snapshotId', 'teacherId', 'title', 'subject',
+          'targetClasses', 'category', 'durationMinutes', 'minSubmitMinutes',
+          'kkm', 'token', 'shuffleQuestions', 'shuffleOptions', 'isPublished',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerUid', 'snapshotId', 'teacherId', 'title', 'subject',
+          'targetClasses', 'category', 'durationMinutes', 'minSubmitMinutes',
+          'kkm', 'token', 'shuffleQuestions', 'shuffleOptions', 'isPublished',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.ownerUid) &&
+        (data.ownerUid == request.auth.uid || isBootstrappedAdmin()) &&
+        isValidId(data.snapshotId) &&
+        data.snapshotId == snapshotId &&
+        data.teacherId is string && data.teacherId.size() >= 1 && data.teacherId.size() <= 128 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 120 &&
+        isBoundedStringList(data.targetClasses, 50, 40) &&
+        data.category in ['Ulangan Resmi', 'Latihan Mandiri'] &&
+        data.durationMinutes is number && data.durationMinutes >= 1 && data.durationMinutes <= 600 &&
+        data.minSubmitMinutes is number && data.minSubmitMinutes >= 0 && data.minSubmitMinutes <= 600 &&
+        data.kkm is number && data.kkm >= 0 && data.kkm <= 100 &&
+        data.token is string && data.token.size() >= 1 && data.token.size() <= 32 &&
+        data.shuffleQuestions is bool &&
+        data.shuffleOptions is bool &&
+        data.isPublished is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAttemptSummaryDoc(data, snapshotId) {
+      return data.keys().hasAll([
+          'ownerUid', 'snapshotId', 'packageId', 'studentNisn', 'studentName',
+          'className', 'status', 'score', 'correctCount', 'totalQuestions',
+          'violationCount', 'passed', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerUid', 'snapshotId', 'packageId', 'studentNisn', 'studentName',
+          'className', 'status', 'score', 'correctCount', 'totalQuestions',
+          'violationCount', 'passed', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.ownerUid) &&
+        (data.ownerUid == request.auth.uid || isBootstrappedAdmin()) &&
+        isValidId(data.snapshotId) &&
+        data.snapshotId == snapshotId &&
+        data.packageId is string && data.packageId.size() >= 1 && data.packageId.size() <= 128 &&
+        data.studentNisn is string && data.studentNisn.size() >= 1 && data.studentNisn.size() <= 32 &&
+        data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 160 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.status in ['not_started', 'in_progress', 'locked', 'completed'] &&
+        data.score is number && data.score >= 0 && data.score <= 100 &&
+        data.correctCount is number && data.correctCount >= 0 && data.correctCount <= 10000 &&
+        data.totalQuestions is number && data.totalQuestions >= 0 && data.totalQuestions <= 10000 &&
+        data.violationCount is number && data.violationCount >= 0 && data.violationCount <= 1000 &&
+        data.passed is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Master Gate & Atomicity helpers for subcollections
+    function ownsParentSnapshot(snapshotId) {
+      return exists(/databases/$(database)/documents/cbt_snapshots/$(snapshotId)) &&
+        get(/databases/$(database)/documents/cbt_snapshots/$(snapshotId)).data.ownerUid == request.auth.uid;
+    }
+
+    function ownsParentSnapshotAfter(snapshotId) {
+      return existsAfter(/databases/$(database)/documents/cbt_snapshots/$(snapshotId)) &&
+        getAfter(/databases/$(database)/documents/cbt_snapshots/$(snapshotId)).data.ownerUid == request.auth.uid;
+    }
+
+    // =========================================================================
+    // Collection: /admins/{adminId}
+    // =========================================================================
+    match /admins/{adminId} {
+      allow get: if isVerifiedUser() && isValidId(adminId) && (
+        request.auth.uid == adminId || isBootstrappedAdmin()
+      );
+      allow list: if isBootstrappedAdmin();
+      allow create: if isVerifiedUser() &&
+        isValidId(adminId) &&
+        isValidAdminProfile(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        adminId == request.auth.uid &&
+        isBootstrappedAdmin();
+      allow update: if isVerifiedUser() &&
+        isValidId(adminId) &&
+        isValidAdminProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isBootstrappedAdmin() ||
+          (
+            request.auth.uid == adminId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
+          )
+        );
+      allow delete: if isBootstrappedAdmin() && isValidId(adminId);
+    }
+
+    // =========================================================================
+    // Collection: /school_portal/{portalId}
+    // Single deterministic non-PII school bridge doc (`sman1kabun_live`)
+    // readable without sign-in on shared devices; strictly admin-only writes.
+    // =========================================================================
+    match /school_portal/{portalId} {
+      allow get: if isValidId(portalId) && portalId == 'sman1kabun_live';
+      allow list: if false;
+      allow create: if isVerifiedUser() &&
+        isValidId(portalId) &&
+        portalId == 'sman1kabun_live' &&
+        isValidSchoolPortalDoc(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isAdmin();
+      allow update: if isVerifiedUser() &&
+        isValidId(portalId) &&
+        portalId == 'sman1kabun_live' &&
+        isValidSchoolPortalDoc(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        isAdmin();
+      allow delete: if isBootstrappedAdmin() && isValidId(portalId);
+    }
+
+    // =========================================================================
+    // Collection: /cbt_snapshots/{snapshotId}
+    // Path-based UID ownership rule: `{uid}` or `cbt_{uid}` matches request.auth.uid
+    // =========================================================================
+    match /cbt_snapshots/{snapshotId} {
+      allow get: if isVerifiedUser() && isValidId(snapshotId) && (
+        isOwnSnapshotPath(snapshotId) ||
+        isAdmin() ||
+        (resource != null && existing().ownerUid == request.auth.uid)
+      );
+      allow list: if isVerifiedUser() && (
+        resource.data.ownerUid == request.auth.uid || isBootstrappedAdmin()
+      );
+      allow create: if isVerifiedUser() &&
+        isValidId(snapshotId) &&
+        (isOwnSnapshotPath(snapshotId) || isAdmin()) &&
+        isValidCbtSnapshot(incoming()) &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() &&
+        isValidId(snapshotId) &&
+        isValidCbtSnapshot(incoming()) &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            isOwnSnapshotPath(snapshotId) &&
+            existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'schoolName', 'academicYear', 'announcementTitle', 'announcementText',
+              'announcementActive', 'themeMode', 'themeAccent', 'classes',
+              'linkedSpreadsheetId', 'linkedSpreadsheetName',
+              'appsScriptWebAppUrl', 'spreadsheetUrl', 'studentCount',
+              'teacherCount', 'packageCount', 'questionCount', 'attemptCount',
+              'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerifiedUser() && isValidId(snapshotId) && (
+        isAdmin() ||
+        (isOwnSnapshotPath(snapshotId) && (resource == null || existing().ownerUid == request.auth.uid))
+      );
+
+      // -----------------------------------------------------------------------
+      // Subcollection: /cbt_snapshots/{snapshotId}/students/{studentId}
+      // -----------------------------------------------------------------------
+      match /students/{studentId} {
+        allow get: if isVerifiedUser() && isValidId(snapshotId) && isValidId(studentId) && (
+          isAdmin() ||
+          (isOwnSnapshotPath(snapshotId) && resource == null && ownsParentSnapshot(snapshotId)) ||
+          (isOwnSnapshotPath(snapshotId) && resource != null && existing().ownerUid == request.auth.uid && ownsParentSnapshot(snapshotId))
+        );
+        allow list: if isVerifiedUser() && (
+          resource.data.ownerUid == request.auth.uid || isBootstrappedAdmin()
+        );
+        allow create: if isVerifiedUser() &&
+          isValidId(snapshotId) &&
+          isValidId(studentId) &&
+          isValidStudentDoc(incoming(), snapshotId) &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (isOwnSnapshotPath(snapshotId) && (ownsParentSnapshot(snapshotId) || ownsParentSnapshotAfter(snapshotId)))
+          );
+        allow update: if isVerifiedUser() &&
+          isValidId(snapshotId) &&
+          isValidId(studentId) &&
+          isValidStudentDoc(incoming(), snapshotId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().snapshotId == existing().snapshotId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              isOwnSnapshotPath(snapshotId) &&
+              existing().ownerUid == request.auth.uid &&
+              ownsParentSnapshot(snapshotId) &&
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly(['nisn', 'name', 'className', 'active', 'blockReason', 'updatedAt']) ||
+                incoming().diff(existing()).affectedKeys().hasOnly(['active', 'blockReason', 'updatedAt'])
+              )
+            )
+          );
+        allow delete: if isVerifiedUser() && isValidId(snapshotId) && isValidId(studentId) && (
+          isAdmin() || (isOwnSnapshotPath(snapshotId) && resource != null && existing().ownerUid == request.auth.uid && ownsParentSnapshot(snapshotId))
+        );
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: /cbt_snapshots/{snapshotId}/teachers/{teacherId}
+      // -----------------------------------------------------------------------
+      match /teachers/{teacherId} {
+        allow get: if isVerifiedUser() && isValidId(snapshotId) && isValidId(teacherId) && (
+          isAdmin() ||
+          (isOwnSnapshotPath(snapshotId) && resource == null && ownsParentSnapshot(snapshotId)) ||
+          (isOwnSnapshotPath(snapshotId) && resource != null && existing().ownerUid == request.auth.uid && ownsParentSnapshot(snapshotId))
+        );
+        allow list: if isVerifiedUser() && (
+          resource.data.ownerUid == request.auth.uid || isBootstrappedAdmin()
+        );
+        allow create: if isVerifiedUser() &&
+          isValidId(snapshotId) &&
+          isValidId(teacherId) &&
+          isValidTeacherDoc(incoming(), snapshotId) &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (isOwnSnapshotPath(snapshotId) && (ownsParentSnapshot(snapshotId) || ownsParentSnapshotAfter(snapshotId)))
+          );
+        allow update: if isVerifiedUser() &&
+          isValidId(snapshotId) &&
+          isValidId(teacherId) &&
+          isValidTeacherDoc(incoming(), snapshotId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().snapshotId == existing().snapshotId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              isOwnSnapshotPath(snapshotId) &&
+              existing().ownerUid == request.auth.uid &&
+              ownsParentSnapshot(snapshotId) &&
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly(['username', 'nip', 'name', 'subjects', 'classes', 'active', 'updatedAt']) ||
+                incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt'])
+              )
+            )
+          );
+        allow delete: if isVerifiedUser() && isValidId(snapshotId) && isValidId(teacherId) && (
+          isAdmin() || (isOwnSnapshotPath(snapshotId) && resource != null && existing().ownerUid == request.auth.uid && ownsParentSnapshot(snapshotId))
+        );
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: /cbt_snapshots/{snapshotId}/packages/{packageId}
+      // -----------------------------------------------------------------------
+      match /packages/{packageId} {
+        allow get: if isVerifiedUser() && isValidId(snapshotId) && isValidId(packageId) && (
+          isAdmin() ||
+          (isOwnSnapshotPath(snapshotId) && resource == null && ownsParentSnapshot(snapshotId)) ||
+          (isOwnSnapshotPath(snapshotId) && resource != null && existing().ownerUid == request.auth.uid && ownsParentSnapshot(snapshotId))
+        );
+        allow list: if isVerifiedUser() && (
+          resource.data.ownerUid == request.auth.uid || isBootstrappedAdmin()
+        );
+        allow create: if isVerifiedUser() &&
+          isValidId(snapshotId) &&
+          isValidId(packageId) &&
+          isValidExamPackageDoc(incoming(), snapshotId) &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (isOwnSnapshotPath(snapshotId) && (ownsParentSnapshot(snapshotId) || ownsParentSnapshotAfter(snapshotId)))
+          );
+        allow update: if isVerifiedUser() &&
+          isValidId(snapshotId) &&
+          isValidId(packageId) &&
+          isValidExamPackageDoc(incoming(), snapshotId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().snapshotId == existing().snapshotId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              isOwnSnapshotPath(snapshotId) &&
+              existing().ownerUid == request.auth.uid &&
+              ownsParentSnapshot(snapshotId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'teacherId', 'title', 'subject', 'targetClasses', 'category',
+                'durationMinutes', 'minSubmitMinutes', 'kkm', 'token',
+                'shuffleQuestions', 'shuffleOptions', 'isPublished', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isVerifiedUser() && isValidId(snapshotId) && isValidId(packageId) && (
+          isAdmin() || (isOwnSnapshotPath(snapshotId) && resource != null && existing().ownerUid == request.auth.uid && ownsParentSnapshot(snapshotId))
+        );
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: /cbt_snapshots/{snapshotId}/attempts/{attemptId}
+      // -----------------------------------------------------------------------
+      match /attempts/{attemptId} {
+        allow get: if isVerifiedUser() && isValidId(snapshotId) && isValidId(attemptId) && (
+          isAdmin() ||
+          (isOwnSnapshotPath(snapshotId) && resource == null && ownsParentSnapshot(snapshotId)) ||
+          (isOwnSnapshotPath(snapshotId) && resource != null && existing().ownerUid == request.auth.uid && ownsParentSnapshot(snapshotId))
+        );
+        allow list: if isVerifiedUser() && (
+          resource.data.ownerUid == request.auth.uid || isBootstrappedAdmin()
+        );
+        allow create: if isVerifiedUser() &&
+          isValidId(snapshotId) &&
+          isValidId(attemptId) &&
+          isValidAttemptSummaryDoc(incoming(), snapshotId) &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (isOwnSnapshotPath(snapshotId) && (ownsParentSnapshot(snapshotId) || ownsParentSnapshotAfter(snapshotId)))
+          );
+        allow update: if isVerifiedUser() &&
+          isValidId(snapshotId) &&
+          isValidId(attemptId) &&
+          isValidAttemptSummaryDoc(incoming(), snapshotId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().snapshotId == existing().snapshotId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              isOwnSnapshotPath(snapshotId) &&
+              existing().ownerUid == request.auth.uid &&
+              ownsParentSnapshot(snapshotId) &&
+              existing().status != 'completed' &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'score', 'correctCount', 'totalQuestions',
+                'violationCount', 'passed', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isVerifiedUser() && isValidId(snapshotId) && isValidId(attemptId) && (
+          isAdmin() || (isOwnSnapshotPath(snapshotId) && resource != null && existing().ownerUid == request.auth.uid && ownsParentSnapshot(snapshotId))
+        );
+      }
+    }
+  }
+}

@@ -1,0 +1,578 @@
+{
+  "entities": {
+    "AdminProfile": {
+      "title": "AdminProfile",
+      "description": "Authorized administrator account registered for Firebase Firestore cloud management.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 200
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "displayName", "createdAt", "updatedAt"]
+    },
+    "CbtCloudSnapshot": {
+      "title": "CbtCloudSnapshot",
+      "description": "Top-level school CBT configuration and workspace sync state stored natively in Firestore.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "schoolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "academicYear": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "announcementTitle": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "announcementText": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "announcementActive": {
+          "type": "boolean"
+        },
+        "themeMode": {
+          "type": "string",
+          "enum": ["light", "dark"]
+        },
+        "themeAccent": {
+          "type": "string",
+          "enum": ["indigo", "blue", "emerald", "amber", "rose", "teal"]
+        },
+        "classes": {
+          "type": "array",
+          "description": "Bounded list of up to 100 school classroom names."
+        },
+        "linkedSpreadsheetId": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "linkedSpreadsheetName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "appsScriptWebAppUrl": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "spreadsheetUrl": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "studentCount": {
+          "type": "number"
+        },
+        "teacherCount": {
+          "type": "number"
+        },
+        "packageCount": {
+          "type": "number"
+        },
+        "questionCount": {
+          "type": "number"
+        },
+        "attemptCount": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "schoolName",
+        "academicYear",
+        "announcementTitle",
+        "announcementText",
+        "announcementActive",
+        "themeMode",
+        "themeAccent",
+        "classes",
+        "linkedSpreadsheetId",
+        "linkedSpreadsheetName",
+        "appsScriptWebAppUrl",
+        "spreadsheetUrl",
+        "studentCount",
+        "teacherCount",
+        "packageCount",
+        "questionCount",
+        "attemptCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StudentDoc": {
+      "title": "StudentDoc",
+      "description": "Student record synced under a school CBT snapshot.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "nisn": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "className": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "blockReason": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "snapshotId",
+        "nisn",
+        "name",
+        "className",
+        "active",
+        "blockReason",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TeacherDoc": {
+      "title": "TeacherDoc",
+      "description": "Teacher metadata record synced under a school CBT snapshot (no plaintext credentials stored).",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "nip": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "subjects": {
+          "type": "array",
+          "description": "Bounded list of up to 30 subject names."
+        },
+        "classes": {
+          "type": "array",
+          "description": "Bounded list of up to 50 class names."
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "snapshotId",
+        "username",
+        "nip",
+        "name",
+        "subjects",
+        "classes",
+        "active",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ExamPackageDoc": {
+      "title": "ExamPackageDoc",
+      "description": "Exam package record synced under a school CBT snapshot.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "teacherId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "targetClasses": {
+          "type": "array",
+          "description": "Bounded list of up to 50 target class names."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["Ulangan Resmi", "Latihan Mandiri"]
+        },
+        "durationMinutes": {
+          "type": "number"
+        },
+        "minSubmitMinutes": {
+          "type": "number"
+        },
+        "kkm": {
+          "type": "number"
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "shuffleQuestions": {
+          "type": "boolean"
+        },
+        "shuffleOptions": {
+          "type": "boolean"
+        },
+        "isPublished": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "snapshotId",
+        "teacherId",
+        "title",
+        "subject",
+        "targetClasses",
+        "category",
+        "durationMinutes",
+        "minSubmitMinutes",
+        "kkm",
+        "token",
+        "shuffleQuestions",
+        "shuffleOptions",
+        "isPublished",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AttemptSummaryDoc": {
+      "title": "AttemptSummaryDoc",
+      "description": "Exam attempt result record synced under a school CBT snapshot with terminal state locking.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "packageId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "studentNisn": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "studentName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "className": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "status": {
+          "type": "string",
+          "enum": ["not_started", "in_progress", "locked", "completed"]
+        },
+        "score": {
+          "type": "number"
+        },
+        "correctCount": {
+          "type": "number"
+        },
+        "totalQuestions": {
+          "type": "number"
+        },
+        "violationCount": {
+          "type": "number"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "snapshotId",
+        "packageId",
+        "studentNisn",
+        "studentName",
+        "className",
+        "status",
+        "score",
+        "correctCount",
+        "totalQuestions",
+        "violationCount",
+        "passed",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PublicSchoolPortal": {
+      "title": "PublicSchoolPortal",
+      "description": "Non-PII shared school configuration and live sync endpoint metadata readable by shared devices without requiring Google Sign-In.",
+      "type": "object",
+      "properties": {
+        "updatedByUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "schoolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "academicYear": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "announcementTitle": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "announcementText": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "announcementActive": {
+          "type": "boolean"
+        },
+        "themeMode": {
+          "type": "string",
+          "enum": ["light", "dark"]
+        },
+        "themeAccent": {
+          "type": "string",
+          "enum": ["indigo", "blue", "emerald", "amber", "rose", "teal"]
+        },
+        "classes": {
+          "type": "array",
+          "description": "Bounded list of up to 100 school classroom names."
+        },
+        "linkedSpreadsheetId": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "linkedSpreadsheetName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "appsScriptWebAppUrl": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "spreadsheetUrl": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "studentCount": {
+          "type": "number"
+        },
+        "teacherCount": {
+          "type": "number"
+        },
+        "packageCount": {
+          "type": "number"
+        },
+        "questionCount": {
+          "type": "number"
+        },
+        "attemptCount": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "updatedByUid",
+        "schoolName",
+        "academicYear",
+        "announcementTitle",
+        "announcementText",
+        "announcementActive",
+        "themeMode",
+        "themeAccent",
+        "classes",
+        "linkedSpreadsheetId",
+        "linkedSpreadsheetName",
+        "appsScriptWebAppUrl",
+        "spreadsheetUrl",
+        "studentCount",
+        "teacherCount",
+        "packageCount",
+        "questionCount",
+        "attemptCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminProfile" },
+      "description": "Registered admin identities for Firestore RBAC verification."
+    },
+    "/school_portal/{portalId}": {
+      "schema": { "$ref": "#/entities/PublicSchoolPortal" },
+      "description": "Non-PII public school configuration document (sman1kabun_live) enabling automatic connection on shared devices without sign-in."
+    },
+    "/cbt_snapshots/{snapshotId}": {
+      "schema": { "$ref": "#/entities/CbtCloudSnapshot" },
+      "description": "School-level CBT configuration and linked Google Spreadsheet state."
+    },
+    "/cbt_snapshots/{snapshotId}/students/{studentId}": {
+      "schema": { "$ref": "#/entities/StudentDoc" },
+      "description": "Normalized student records (up to 999) belonging to a CBT snapshot."
+    },
+    "/cbt_snapshots/{snapshotId}/teachers/{teacherId}": {
+      "schema": { "$ref": "#/entities/TeacherDoc" },
+      "description": "Normalized teacher records belonging to a CBT snapshot."
+    },
+    "/cbt_snapshots/{snapshotId}/packages/{packageId}": {
+      "schema": { "$ref": "#/entities/ExamPackageDoc" },
+      "description": "Normalized exam packages belonging to a CBT snapshot."
+    },
+    "/cbt_snapshots/{snapshotId}/attempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/AttemptSummaryDoc" },
+      "description": "Normalized student exam attempt results belonging to a CBT snapshot."
+    }
+  }
+}

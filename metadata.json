@@ -1,0 +1,6 @@
+{
+  "name": "CerdasExam CBT — SMA Negeri 1 Kabun",
+  "description": "Aplikasi Computer-Based Test (CBT) modern untuk SMA Negeri 1 Kabun dengan pemisahan portal Super Admin, Guru, dan Siswa serta sistem pengawasan kamera dan keamanan anti-curang.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
