@@ -50,6 +50,7 @@ import {
   type CollectiveQuestionPatch,
   type WeightDistributionMode,
 } from '../utils/cbtLogic';
+import type { ParsedExamScheduleRow } from '../utils/examScheduleImport';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import { firebaseAuth } from '../lib/firebase';
 import {
@@ -180,8 +181,11 @@ interface CBTContextValue {
     configOverride?: SpreadsheetSyncConfig,
     options?: { manual?: boolean }
   ) => Promise<{ ok: boolean; message: string }>;
-  // Teacher: Packages & Questions
+  // Teacher & Admin: Packages, Schedules & Questions
   upsertExamPackage: (pkg: Omit<ExamPackage, 'id' | 'createdAt'> & { id?: string }) => string;
+  importExamSchedulesBatch: (
+    rows: ParsedExamScheduleRow[]
+  ) => { added: number; updated: number; newClassesAdded: number };
   togglePackagePublished: (packageId: string) => void;
   deleteExamPackage: (packageId: string) => void;
   upsertQuestion: (
@@ -1438,6 +1442,116 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
         };
       });
       return id;
+    },
+    [commitDb, session]
+  );
+
+  const importExamSchedulesBatch = useCallback(
+    (rows: ParsedExamScheduleRow[]) => {
+      let added = 0;
+      let updated = 0;
+      let newClassesAdded = 0;
+      if (rows.length === 0) return { added, updated, newClassesAdded };
+
+      commitDb((prev) => {
+        const now = new Date().toISOString();
+        const packagesByToken = new Map<string, ExamPackage>(
+          prev.packages.map((p) => [p.token.trim().toUpperCase(), p])
+        );
+        const nextPackages = [...prev.packages];
+        const classSet = new Set(prev.classes.map((c) => c.trim().toUpperCase()));
+        const nextClasses = [...prev.classes];
+
+        rows.forEach((row, idx) => {
+          const normalizedToken = row.token.trim().toUpperCase();
+          row.targetClasses.forEach((cls) => {
+            const upper = cls.trim().toUpperCase();
+            if (upper && !classSet.has(upper)) {
+              classSet.add(upper);
+              nextClasses.push(upper);
+              newClassesAdded += 1;
+            }
+          });
+
+          const existing = packagesByToken.get(normalizedToken);
+          if (existing) {
+            updated += 1;
+            const updatedPkg: ExamPackage = {
+              ...existing,
+              title: row.title,
+              subject: row.subject,
+              category: row.category,
+              targetClasses:
+                row.targetClasses.length > 0
+                  ? row.targetClasses
+                  : existing.targetClasses,
+              teacherId: row.teacherId || existing.teacherId,
+              durationMinutes: row.durationMinutes,
+              minSubmitMinutes: row.minSubmitMinutes,
+              kkm: row.kkm,
+              isPublished: row.isPublished,
+              allowIndependentAccess: row.isPublished
+                ? true
+                : existing.allowIndependentAccess,
+              scheduledDate: row.scheduledDate || existing.scheduledDate,
+              scheduledStartTime:
+                row.scheduledStartTime || existing.scheduledStartTime,
+              scheduledEndTime:
+                row.scheduledEndTime || existing.scheduledEndTime,
+              sessionName: row.sessionName || existing.sessionName,
+            };
+            const existingIdx = nextPackages.findIndex((p) => p.id === existing.id);
+            if (existingIdx >= 0) {
+              nextPackages[existingIdx] = updatedPkg;
+            }
+            packagesByToken.set(normalizedToken, updatedPkg);
+          } else {
+            added += 1;
+            const createdPkg: ExamPackage = {
+              id: `pkg-sched-${Date.now()}-${idx}`,
+              teacherId: row.teacherId,
+              title: row.title,
+              subject: row.subject,
+              targetClasses: row.targetClasses,
+              category: row.category,
+              durationMinutes: row.durationMinutes,
+              minSubmitMinutes: row.minSubmitMinutes,
+              kkm: row.kkm,
+              token: normalizedToken,
+              shuffleQuestions: true,
+              shuffleOptions: true,
+              isPublished: row.isPublished,
+              allowIndependentAccess: row.isPublished,
+              teacherActivatedAt: row.isPublished ? now : undefined,
+              scheduledDate: row.scheduledDate || undefined,
+              scheduledStartTime: row.scheduledStartTime || undefined,
+              scheduledEndTime: row.scheduledEndTime || undefined,
+              sessionName: row.sessionName || undefined,
+              createdAt: now,
+            };
+            nextPackages.unshift(createdPkg);
+            packagesByToken.set(normalizedToken, createdPkg);
+          }
+        });
+
+        return {
+          ...prev,
+          classes: nextClasses,
+          packages: nextPackages,
+          auditLogs: [
+            makeAudit(
+              'admin',
+              session?.name || 'Super Admin',
+              'Impor Jadwal Ujian Massal',
+              'exam',
+              `Berhasil mengimpor ${rows.length} jadwal ujian (${added} sesi baru, ${updated} diperbarui${newClassesAdded > 0 ? `, ${newClassesAdded} kelas baru` : ''}).`
+            ),
+            ...prev.auditLogs,
+          ].slice(0, 200),
+        };
+      });
+
+      return { added, updated, newClassesAdded };
     },
     [commitDb, session]
   );
@@ -3219,6 +3333,7 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
         pushDatabaseToSpreadsheet,
         pullDatabaseFromSpreadsheet,
         upsertExamPackage,
+        importExamSchedulesBatch,
         togglePackagePublished,
         deleteExamPackage,
         upsertQuestion,

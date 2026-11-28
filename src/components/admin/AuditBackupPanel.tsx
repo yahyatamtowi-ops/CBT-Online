@@ -155,65 +155,68 @@ export function AuditBackupPanel() {
   const subMenus: Array<{
     id: AuditSubMenu;
     label: string;
+    mobileLabel: string;
     icon: React.ComponentType<{ className?: string }>;
     badge?: number;
   }> = [
-    { id: 'cloud', label: 'Firebase & Cloud', icon: Cloud },
-    { id: 'spreadsheet', label: 'Spreadsheet & Script', icon: FileSpreadsheet },
-    { id: 'backup', label: 'Backup & Hapus Data', icon: Database },
+    { id: 'cloud', label: 'Firebase & Cloud', mobileLabel: 'Cloud', icon: Cloud },
+    { id: 'spreadsheet', label: 'Spreadsheet & Script', mobileLabel: 'Sheets', icon: FileSpreadsheet },
+    { id: 'backup', label: 'Backup & Hapus Data', mobileLabel: 'Backup', icon: Database },
     {
       id: 'violations',
       label: 'Pelanggaran',
+      mobileLabel: 'Pelanggaran',
       icon: AlertTriangle,
       badge: db.violations.length,
     },
     {
       id: 'audit',
       label: 'Audit Log',
+      mobileLabel: 'Audit Log',
       icon: History,
       badge: db.auditLogs.length,
     },
   ];
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-            Audit Log, Sinkronisasi & Backup Data
-          </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Pilih sub-menu di bawah untuk mengelola Cloud, Spreadsheet, Backup/Hapus Data, Pelanggaran, dan Audit Log tanpa perlu menggulir panjang.
-          </p>
-        </div>
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-lg sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+          Audit, Sinkronisasi & Backup
+        </h1>
+        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          Kelola Cloud, Spreadsheet, Backup/Hapus Data, Pelanggaran, dan Audit Log.
+        </p>
       </div>
 
-      {/* Horizontal Sub-Menu Navigation */}
+      {/* Neat Full-Width Compact Sub-Menu (3+2 symmetric grid on mobile, inline row on sm+) */}
       <nav
         aria-label="Sub Menu Audit dan Backup Data"
         data-testid="audit-submenu-nav"
-        className="flex flex-wrap gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-1.5 shadow-xs"
+        className="grid grid-cols-6 sm:flex sm:flex-wrap gap-1 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-1 shadow-xs"
       >
-        {subMenus.map((item) => {
+        {subMenus.map((item, idx) => {
           const Icon = item.icon;
           const active = activeSubMenu === item.id;
+          const mobileSpanClass = idx < 3 ? 'col-span-2' : 'col-span-3';
           return (
             <button
               key={item.id}
               type="button"
               data-testid={`audit-submenu-${item.id}`}
               onClick={() => setActiveSubMenu(item.id)}
-              className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
+              className={`${mobileSpanClass} sm:col-auto inline-flex items-center justify-center gap-1.5 rounded-lg px-2 sm:px-3 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap min-w-0 ${
                 active
                   ? 'bg-indigo-600 text-white shadow-xs'
                   : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
               }`}
             >
               <Icon className="h-3.5 w-3.5 shrink-0" />
-              <span>{item.label}</span>
+              <span className="sm:hidden truncate">{item.mobileLabel}</span>
+              <span className="hidden sm:inline">{item.label}</span>
               {typeof item.badge === 'number' && (
                 <span
-                  className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] font-bold tabular-nums ${
+                  className={`rounded px-1 py-0.5 font-mono text-[10px] font-bold tabular-nums leading-none ${
                     active
                       ? 'bg-white/20 text-white'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'

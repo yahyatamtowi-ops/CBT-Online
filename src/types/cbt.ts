@@ -134,6 +134,11 @@ export interface ExamPackage {
   /** When enabled by subject teacher, allows students to access this package whenever the teacher activates it */
   allowIndependentAccess?: boolean;
   teacherActivatedAt?: string;
+  /** Optional schedule metadata imported via bulk exam schedule upload */
+  scheduledDate?: string; // YYYY-MM-DD
+  scheduledStartTime?: string; // HH:mm
+  scheduledEndTime?: string; // HH:mm
+  sessionName?: string; // e.g. "Sesi 1"
   createdAt: string;
 }
 

@@ -523,23 +523,23 @@ export function QuestionBankEditor({
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-            Bank Soal & Editor Interaktif
+          <h1 className="text-lg sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+            Bank Soal & Editor
           </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Kelola soal Pilihan Ganda, PG Kompleks, Menjodohkan, Benar/Salah, dan Soal Esai (koreksi semantik otomatis · 5–10 soal).
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+            PG, PG Kompleks, Menjodohkan, Benar/Salah & Esai otomatis (5–10 soal).
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5 sm:gap-2 w-full lg:w-auto">
           <select
             value={currentPkg.id}
             onChange={(e) => onSelectPackage(e.target.value)}
             aria-label="Pilih paket ujian"
-            className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 max-w-xs"
+            className="col-span-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 w-full sm:w-auto sm:max-w-xs"
           >
             {myPackages.map((p) => (
               <option key={p.id} value={p.id}>
@@ -551,10 +551,10 @@ export function QuestionBankEditor({
           <button
             type="button"
             onClick={handleDownloadQuestionTemplate}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 sm:px-3 py-2 text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
           >
-            <FileDown className="h-3.5 w-3.5" />
-            <span>Download Format</span>
+            <FileDown className="h-3.5 w-3.5 shrink-0" />
+            <span>Format CSV</span>
           </button>
 
           <button
@@ -566,9 +566,9 @@ export function QuestionBankEditor({
               setShowEditor(false);
               setShowBulkImport(false);
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/40 px-3 py-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-950/70 disabled:opacity-50 whitespace-nowrap"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/40 px-2.5 sm:px-3 py-2 text-[11px] sm:text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-950/70 disabled:opacity-50 whitespace-nowrap"
           >
-            <Scale className="h-3.5 w-3.5" />
+            <Scale className="h-3.5 w-3.5 shrink-0" />
             <span>Bobot Poin</span>
           </button>
 
@@ -581,9 +581,9 @@ export function QuestionBankEditor({
               setShowEditor(false);
               setShowBulkImport(false);
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/40 px-3 py-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-950/70 disabled:opacity-50 whitespace-nowrap"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/40 px-2.5 sm:px-3 py-2 text-[11px] sm:text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-950/70 disabled:opacity-50 whitespace-nowrap"
           >
-            <CheckSquare className="h-3.5 w-3.5" />
+            <CheckSquare className="h-3.5 w-3.5 shrink-0" />
             <span>
               Edit Kolektif{validSelectedIds.length > 0 ? ` (${validSelectedIds.length})` : ''}
             </span>
@@ -597,27 +597,27 @@ export function QuestionBankEditor({
               setShowWeightPanel(false);
               setShowCollectiveEditor(false);
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 sm:px-3 py-2 text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
           >
-            <Upload className="h-3.5 w-3.5" />
+            <Upload className="h-3.5 w-3.5 shrink-0" />
             <span>Import Massal</span>
           </button>
 
           <button
             type="button"
             onClick={handleExportQuestions}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 sm:px-3 py-2 text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
           >
-            <Download className="h-3.5 w-3.5" />
+            <Download className="h-3.5 w-3.5 shrink-0" />
             <span>Export Soal</span>
           </button>
 
           <button
             type="button"
             onClick={() => openNewQuestion('single_choice')}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-2.5 sm:px-3.5 py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-3.5 w-3.5 shrink-0" />
             <span>Tambah Soal</span>
           </button>
         </div>

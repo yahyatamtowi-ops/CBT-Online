@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useCBT } from '../../context/CBTContext';
 import type { ExamCategory, ExamPackage, TeacherAccount } from '../../types/cbt';
+import { ExamSummaryDashboard } from './ExamSummaryDashboard';
 
 export function ExamPackageManager({
   teacher,
@@ -148,14 +149,14 @@ export function ExamPackageManager({
     teacher.classes.length > 0 ? teacher.classes : db.classes;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-            Manajemen Paket Ujian Saya
+          <h1 className="text-lg sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+            Paket Ujian Saya
           </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Mata Pelajaran Ampuan: {teacher.subjects.join(' · ')}
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+            Mapel: {teacher.subjects.join(' · ')}
             {teacher.classes.length > 0 ? ` · Kelas: ${teacher.classes.join(', ')}` : ''}
           </p>
         </div>
@@ -163,7 +164,7 @@ export function ExamPackageManager({
         <button
           type="button"
           onClick={openCreateForm}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap self-start sm:self-auto"
+          className="inline-flex w-full sm:w-auto items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
         >
           <Plus className="h-4 w-4" />
           <span>Buat Paket Ujian</span>
@@ -178,6 +179,14 @@ export function ExamPackageManager({
           {feedback}
         </div>
       )}
+
+      {/* D3.js Exam Summary Dashboard Widget */}
+      <ExamSummaryDashboard
+        packages={myPackages}
+        attempts={db.attempts}
+        violations={db.violations}
+        onOpenProctoring={onOpenProctoring}
+      />
 
       {/* Package Form */}
       {showForm && (
@@ -428,7 +437,7 @@ export function ExamPackageManager({
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-2">
           {myPackages.map((pkg) => {
             const qCount = db.questions.filter((q) => q.packageId === pkg.id).length;
             const attemptCount = db.attempts.filter((a) => a.packageId === pkg.id).length;
@@ -437,7 +446,7 @@ export function ExamPackageManager({
             return (
               <div
                 key={pkg.id}
-                className={`rounded-xl border bg-white dark:bg-slate-900 p-5 space-y-4 transition-colors ${
+                className={`rounded-xl border bg-white dark:bg-slate-900 p-3.5 sm:p-5 space-y-3 sm:space-y-4 transition-colors ${
                   isSelected
                     ? 'border-indigo-500 ring-1 ring-indigo-500/20'
                     : 'border-slate-200 dark:border-slate-800'

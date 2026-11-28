@@ -443,18 +443,18 @@ export function PrintResultsPanel({
   }
 
   return (
-    <div className="space-y-6" data-testid="print-results-panel">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+    <div className="space-y-4 sm:space-y-6" data-testid="print-results-panel">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+          <h1 className="text-lg sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
             Cetak Hasil Evaluasi (PDF)
           </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Unduh laporan nilai kelas dan lembar hasil individu peserta (termasuk koreksi esai) dalam format PDF siap cetak.
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+            Unduh laporan nilai kelas & hasil individu peserta (PDF siap cetak).
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2">
           <select
             value={currentPkg.id}
             onChange={(e) => {
@@ -462,7 +462,7 @@ export function PrintResultsPanel({
               setClassFilter('ALL');
             }}
             aria-label="Pilih paket ujian untuk cetak hasil"
-            className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 max-w-xs"
+            className="w-full sm:w-auto sm:max-w-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100"
           >
             {myPackages.map((p) => (
               <option key={p.id} value={p.id}>
@@ -475,7 +475,7 @@ export function PrintResultsPanel({
             type="button"
             data-testid="download-class-pdf-btn"
             onClick={handleDownloadClassPDF}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
+            className="inline-flex w-full sm:w-auto items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
           >
             <Download className="h-4 w-4" />
             <span>Download Laporan PDF</span>
@@ -486,76 +486,76 @@ export function PrintResultsPanel({
       {feedback && (
         <div
           role="status"
-          className="rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 px-4 py-3 text-xs font-medium text-emerald-800 dark:text-emerald-200"
+          className="rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 px-3.5 py-2.5 text-xs font-medium text-emerald-800 dark:text-emerald-200"
         >
           {feedback}
         </div>
       )}
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-4">
+          <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
             <span>Total Peserta</span>
-            <Users className="h-4 w-4 text-indigo-500" />
+            <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-indigo-500 shrink-0" />
           </div>
-          <div className="mt-1.5 font-mono text-2xl font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+          <div className="mt-1 font-mono text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 tabular-nums">
             {stats.total}
           </div>
           <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-            {stats.finished} selesai dinilai
+            {stats.finished} selesai
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>Rata-Rata Nilai</span>
-            <FileText className="h-4 w-4 text-indigo-500" />
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-4">
+          <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
+            <span>Rata-Rata</span>
+            <FileText className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-indigo-500 shrink-0" />
           </div>
-          <div className="mt-1.5 font-mono text-2xl font-bold text-indigo-700 dark:text-indigo-400 tabular-nums">
+          <div className="mt-1 font-mono text-xl sm:text-2xl font-bold text-indigo-700 dark:text-indigo-400 tabular-nums">
             {stats.avg}
           </div>
           <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-            KKM Paket: {currentPkg.kkm}
+            KKM {currentPkg.kkm}
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>Tertinggi / Terendah</span>
-            <Printer className="h-4 w-4 text-slate-400" />
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-4">
+          <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
+            <span>Skor Max/Min</span>
+            <Printer className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-slate-400 shrink-0" />
           </div>
-          <div className="mt-1.5 font-mono text-2xl font-bold text-slate-900 dark:text-slate-100 tabular-nums">
-            {stats.highest} <span className="text-sm text-slate-400">/ {stats.lowest}</span>
+          <div className="mt-1 font-mono text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+            {stats.highest} <span className="text-xs sm:text-sm text-slate-400">/ {stats.lowest}</span>
           </div>
           <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-            Rentang skor kelas
+            Rentang kelas
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>Ketuntasan KKM</span>
-            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-4">
+          <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
+            <span>Tuntas / Rem.</span>
+            <CheckCircle2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-emerald-500 shrink-0" />
           </div>
-          <div className="mt-1.5 font-mono text-2xl font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
-            {stats.passed} <span className="text-sm text-rose-600 dark:text-rose-400">/ {stats.remedial}</span>
+          <div className="mt-1 font-mono text-xl sm:text-2xl font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+            {stats.passed} <span className="text-xs sm:text-sm text-rose-600 dark:text-rose-400">/ {stats.remedial}</span>
           </div>
           <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-            Tuntas / Remedial
+            Ketuntasan KKM
           </div>
         </div>
       </div>
 
       {/* Filters & Preview Table */}
       <section className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-4 border-b border-slate-100 dark:border-slate-800">
-          <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 px-3.5 py-3 sm:px-5 sm:py-4 border-b border-slate-100 dark:border-slate-800">
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full sm:w-auto">
             <select
               value={classFilter}
               onChange={(e) => setClassFilter(e.target.value)}
               aria-label="Filter kelas cetak hasil"
-              className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200"
+              className="w-full sm:w-auto rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200"
             >
               <option value="ALL">Semua Kelas ({classOptions.length})</option>
               {classOptions.map((cls) => (
@@ -569,7 +569,7 @@ export function PrintResultsPanel({
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
               aria-label="Filter status kelulusan"
-              className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200"
+              className="w-full sm:w-auto rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200"
             >
               <option value="ALL">Semua Status</option>
               <option value="finished">Sudah Selesai</option>

@@ -435,32 +435,35 @@ export function UserManagement() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+    <div className="space-y-4 sm:space-y-5">
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-            Manajemen Pengguna, Kelas & Akun Admin
+          <h1 className="text-lg sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+            Pengguna, Kelas & Akun Admin
           </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Kelola data siswa, akun guru, daftar kelas, serta kredensial Super Admin.
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+            Kelola siswa, guru, daftar kelas, dan akun Super Admin.
           </p>
         </div>
 
-        {/* Segmented Sub-Tab Switcher */}
-        <div className="inline-flex flex-wrap rounded-lg bg-slate-200/70 dark:bg-slate-800 p-1 self-start">
+        {/* Neat Symmetric 2x2 Mobile Sub-Tab Switcher */}
+        <div
+          data-testid="users-submenu-nav"
+          className="grid grid-cols-2 sm:inline-flex gap-1 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-1 w-full sm:w-auto shadow-xs"
+        >
           <button
             type="button"
             onClick={() => {
               setSubTab('students');
               setFeedback(null);
             }}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+            className={`rounded-lg px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap text-center ${
               subTab === 'students'
-                ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-400 shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            Data Siswa ({db.students.length})
+            Siswa ({db.students.length})
           </button>
           <button
             type="button"
@@ -468,13 +471,13 @@ export function UserManagement() {
               setSubTab('teachers');
               setFeedback(null);
             }}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+            className={`rounded-lg px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap text-center ${
               subTab === 'teachers'
-                ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-400 shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            Data Guru ({db.teachers.length})
+            Guru ({db.teachers.length})
           </button>
           <button
             type="button"
@@ -482,13 +485,13 @@ export function UserManagement() {
               setSubTab('classes');
               setFeedback(null);
             }}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+            className={`rounded-lg px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap text-center ${
               subTab === 'classes'
-                ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-400 shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            Daftar Kelas ({db.classes.length})
+            Kelas ({db.classes.length})
           </button>
           <button
             type="button"
@@ -496,13 +499,13 @@ export function UserManagement() {
               setSubTab('admin_account');
               setFeedback(null);
             }}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+            className={`rounded-lg px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap text-center ${
               subTab === 'admin_account'
-                ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-400 shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            Akun Super Admin
+            Akun Admin
           </button>
         </div>
       </div>
@@ -522,34 +525,34 @@ export function UserManagement() {
 
       {/* STUDENTS TAB */}
       {subTab === 'students' && (
-        <div className="space-y-6">
+        <div className="space-y-4 sm:space-y-6">
           <form
             onSubmit={handleSaveStudent}
-            className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4"
+            className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-5 space-y-3.5 sm:space-y-4"
           >
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
+              <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
                 {editingStudentId ? 'Edit Data Siswa' : 'Tambah Siswa Manual'}
               </h2>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5 sm:gap-2 w-full sm:w-auto">
                 <button
                   type="button"
                   onClick={() => {
                     downloadTextFile('format-import-siswa.csv', generateStudentsCSVTemplate());
                     setFeedback({ type: 'ok', text: 'Template format-import-siswa.csv berhasil diunduh.' });
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
                 >
-                  <Download className="h-3.5 w-3.5" />
-                  <span>Download Format CSV</span>
+                  <Download className="h-3.5 w-3.5 shrink-0" />
+                  <span>Format CSV</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowStudentCsvModal((v) => !v)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 whitespace-nowrap"
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 whitespace-nowrap"
                 >
-                  <Upload className="h-3.5 w-3.5" />
-                  <span>Import Massal CSV</span>
+                  <Upload className="h-3.5 w-3.5 shrink-0" />
+                  <span>Import CSV</span>
                 </button>
               </div>
             </div>

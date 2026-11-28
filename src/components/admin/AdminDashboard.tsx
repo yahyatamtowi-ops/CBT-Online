@@ -32,99 +32,103 @@ export function AdminDashboard({
   const maxVioCount = Math.max(1, ...violationBreakdown.map(([, c]) => c));
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+          <h1 className="text-lg sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
             Dashboard Eksekutif
           </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Ringkasan operasional ujian real-time {db.school.schoolName} · {db.school.academicYear}
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+            {db.school.schoolName} · {db.school.academicYear}
           </p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => onNavigate('schedule')}
-            className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
+            className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap text-center"
           >
-            Kelola Sesi & Token
+            Sesi & Token
           </button>
           <button
             type="button"
             onClick={() => onNavigate('security')}
-            className="rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
+            className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap text-center"
           >
             Keamanan & Tema
           </button>
         </div>
       </div>
 
-      {/* KPI Grid */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
-          <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
-            <span>Total Siswa Terdaftar</span>
-            <Users className="h-4 w-4 text-slate-400" />
+      {/* Dense KPI Grid: 2 columns on mobile (5th card full width for symmetry), 5 cols on xl */}
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-5">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-5">
+          <div className="flex items-center justify-between text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400">
+            <span>Total Siswa</span>
+            <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-slate-400 shrink-0" />
           </div>
-          <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
+          <p className="mt-1.5 text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
             {totalStudents}
           </p>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {activeStudents} aktif · {totalStudents - activeStudents} diblokir
+          <p className="mt-0.5 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
+            {activeStudents} aktif · {totalStudents - activeStudents} blokir
           </p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
-          <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-5">
+          <div className="flex items-center justify-between text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400">
             <span>Total Guru</span>
-            <BookOpen className="h-4 w-4 text-slate-400" />
+            <BookOpen className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-slate-400 shrink-0" />
           </div>
-          <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
+          <p className="mt-1.5 text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
             {totalTeachers}
           </p>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <p className="mt-0.5 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
             {db.classes.length} kelas aktif
           </p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
-          <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-5">
+          <div className="flex items-center justify-between text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400">
             <span>Ujian Aktif</span>
-            <Clock className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+            <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
           </div>
-          <p className="mt-2 text-2xl font-bold text-indigo-700 dark:text-indigo-400 font-mono tabular-nums">
+          <p className="mt-1.5 text-xl sm:text-2xl font-bold text-indigo-700 dark:text-indigo-400 font-mono tabular-nums">
             {activeExams}
           </p>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <p className="mt-0.5 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
             Token: {db.schedule.tokensReleased ? 'Dirilis' : 'Ditahan'}
           </p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
-          <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
-            <span>Sedang Mengerjakan</span>
-            <Users className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-5">
+          <div className="flex items-center justify-between text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400">
+            <span>Mengerjakan</span>
+            <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
           </div>
-          <p className="mt-2 text-2xl font-bold text-emerald-700 dark:text-emerald-400 font-mono tabular-nums">
+          <p className="mt-1.5 text-xl sm:text-2xl font-bold text-emerald-700 dark:text-emerald-400 font-mono tabular-nums">
             {inProgressAttempts.length}
           </p>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {db.attempts.filter((a) => a.status === 'completed').length} selesai dikumpulkan
+          <p className="mt-0.5 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
+            {db.attempts.filter((a) => a.status === 'completed').length} selesai
           </p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
-          <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
-            <span>Pelanggaran Hari Ini</span>
-            <ShieldAlert className="h-4 w-4 text-rose-600 dark:text-rose-400" />
+        <div className="col-span-2 xl:col-span-1 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-5 flex items-center justify-between xl:block">
+          <div>
+            <div className="flex items-center gap-1.5 text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400">
+              <span>Pelanggaran Hari Ini</span>
+            </div>
+            <p className="mt-1 text-xl sm:text-2xl font-bold text-rose-700 dark:text-rose-400 font-mono tabular-nums">
+              {todayViolations.length}
+            </p>
           </div>
-          <p className="mt-2 text-2xl font-bold text-rose-700 dark:text-rose-400 font-mono tabular-nums">
-            {todayViolations.length}
-          </p>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {lockedAttempts.length} peserta terkunci sistem
-          </p>
+          <div className="text-right xl:text-left xl:mt-0.5">
+            <ShieldAlert className="h-4 w-4 text-rose-600 dark:text-rose-400 ml-auto mb-1 xl:hidden" />
+            <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
+              {lockedAttempts.length} peserta terkunci
+            </p>
+          </div>
         </div>
       </div>
 

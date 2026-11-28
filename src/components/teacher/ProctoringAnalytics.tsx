@@ -122,23 +122,23 @@ export function ProctoringAnalytics({
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-            Live Monitoring & Analisis Butir Soal
+          <h1 className="text-lg sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+            Live Monitoring & Analisis Soal
           </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Pantau status peserta secara real-time, buka kunci pelanggaran, tambah waktu, dan evaluasi tingkat kesukaran soal.
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+            Pantau peserta real-time, buka kunci pelanggaran, tambah waktu & analisis soal.
           </p>
         </div>
 
-        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
+        <div className="grid grid-cols-2 sm:flex sm:flex-nowrap items-center gap-2 shrink-0">
           <select
             value={currentPkg.id}
             onChange={(e) => onSelectPackage(e.target.value)}
             aria-label="Pilih paket ujian untuk monitoring"
-            className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 w-full sm:w-64 truncate"
+            className="col-span-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 w-full sm:w-64 truncate"
           >
             {myPackages.map((p) => (
               <option key={p.id} value={p.id}>
@@ -151,7 +151,7 @@ export function ProctoringAnalytics({
             type="button"
             disabled={isRefreshing || syncRuntime.status === 'syncing'}
             onClick={handleRefreshLive}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 whitespace-nowrap shrink-0"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 whitespace-nowrap shrink-0"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
             <span>{isRefreshing ? 'Memuat...' : 'Segarkan'}</span>
@@ -160,10 +160,10 @@ export function ProctoringAnalytics({
           <button
             type="button"
             onClick={handleExportCSV}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap shrink-0"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap shrink-0"
           >
             <Download className="h-3.5 w-3.5" />
-            <span>Export Nilai CSV</span>
+            <span>Export CSV</span>
           </button>
         </div>
       </div>
@@ -171,85 +171,95 @@ export function ProctoringAnalytics({
       {notice && (
         <div
           role="status"
-          className="rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 px-4 py-3 text-xs font-medium text-emerald-800 dark:text-emerald-200"
+          className="rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 px-3.5 py-2.5 text-xs font-medium text-emerald-800 dark:text-emerald-200"
         >
           {notice}
         </div>
       )}
 
       {/* Summary Strip */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-          <div className="text-xs text-slate-500 dark:text-slate-400">Belum Login</div>
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 sm:grid-cols-4">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-4">
+          <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">Belum Login</div>
           <div className="mt-1 text-xl font-bold font-mono tabular-nums text-slate-700 dark:text-slate-200">
             {notStartedCount}
           </div>
         </div>
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-          <div className="text-xs text-slate-500 dark:text-slate-400">Sedang Mengerjakan</div>
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-4">
+          <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">Mengerjakan</div>
           <div className="mt-1 text-xl font-bold font-mono tabular-nums text-indigo-700 dark:text-indigo-400">
             {inProgressCount}
           </div>
         </div>
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-          <div className="text-xs text-slate-500 dark:text-slate-400">Terkunci Pelanggaran</div>
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-4">
+          <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">Terkunci</div>
           <div className="mt-1 text-xl font-bold font-mono tabular-nums text-rose-700 dark:text-rose-400">
             {lockedCount}
           </div>
         </div>
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-          <div className="text-xs text-slate-500 dark:text-slate-400">Selesai Mengerjakan</div>
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-4">
+          <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">Selesai</div>
           <div className="mt-1 text-xl font-bold font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
             {completedCount}
           </div>
         </div>
       </div>
 
-      {/* View Switcher */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="inline-flex rounded-lg bg-slate-200/70 dark:bg-slate-800 p-1 self-start">
+      {/* View Switcher & Status Filter (Symmetric full-width grids on mobile) */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
+        <div
+          role="tablist"
+          aria-label="Sub Menu Monitoring"
+          className="grid grid-cols-2 sm:inline-flex gap-1 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-100/90 dark:bg-slate-900/80 p-1 w-full sm:w-auto"
+        >
           <button
             type="button"
+            role="tab"
+            aria-selected={subView === 'proctoring'}
             onClick={() => setSubView('proctoring')}
-            className={`rounded-md px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+            className={`min-h-[36px] rounded-lg px-2.5 sm:px-3.5 py-1.5 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap ${
               subView === 'proctoring'
-                ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs'
+                ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 shadow-xs ring-1 ring-slate-200/70 dark:ring-slate-700'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
             }`}
           >
-            Proctoring Dashboard ({rosterRows.length})
+            <span className="sm:hidden">Proctoring ({rosterRows.length})</span>
+            <span className="hidden sm:inline">Proctoring Dashboard ({rosterRows.length})</span>
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={subView === 'analysis'}
             onClick={() => setSubView('analysis')}
-            className={`rounded-md px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+            className={`min-h-[36px] rounded-lg px-2.5 sm:px-3.5 py-1.5 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap ${
               subView === 'analysis'
-                ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs'
+                ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 shadow-xs ring-1 ring-slate-200/70 dark:ring-slate-700'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
             }`}
           >
-            Analisis Butir Soal ({pkgQuestions.length})
+            <span className="sm:hidden">Analisis Soal ({pkgQuestions.length})</span>
+            <span className="hidden sm:inline">Analisis Butir Soal ({pkgQuestions.length})</span>
           </button>
         </div>
 
         {subView === 'proctoring' && (
-          <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 dark:bg-slate-800 p-1">
+          <div className="grid grid-cols-6 sm:flex gap-1 rounded-xl border border-slate-200/70 dark:border-slate-800 bg-slate-100/90 dark:bg-slate-900/80 p-1 w-full sm:w-auto">
             {(
               [
-                ['ALL', 'Semua'],
-                ['in_progress', 'Mengerjakan'],
-                ['locked', 'Terkunci'],
-                ['completed', 'Selesai'],
-                ['not_started', 'Belum Login'],
+                ['ALL', 'Semua', 'col-span-2'],
+                ['in_progress', 'Aktif', 'col-span-2'],
+                ['locked', 'Terkunci', 'col-span-2'],
+                ['completed', 'Selesai', 'col-span-3'],
+                ['not_started', 'Belum Login', 'col-span-3'],
               ] as const
-            ).map(([val, label]) => (
+            ).map(([val, label, spanClass]) => (
               <button
                 key={val}
                 type="button"
                 onClick={() => setStatusFilter(val)}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                className={`${spanClass} sm:col-span-1 min-h-[32px] rounded-lg px-2 sm:px-2.5 py-1 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap ${
                   statusFilter === val
-                    ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs'
+                    ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 shadow-xs ring-1 ring-slate-200/70 dark:ring-slate-700'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                 }`}
               >

@@ -108,84 +108,84 @@ export function GlobalSecuritySettings() {
   }> = [
     {
       key: 'requireCameraMonitoring',
-      title: 'Wajib Aktifkan Kamera, Pelacakan Wajah & Suara Teguran',
+      title: 'Kamera, Pelacakan Wajah & Suara Teguran',
       description:
-        'Memantau keberadaan wajah di layar, gerakan wajah menoleh ke samping kanan/kiri, keberadaan >1 orang, serta percakapan melalui mikrofon (pandangan normal ke layar/menunduk tidak dianggap pelanggaran). Pelanggaran langsung ditegur dengan suara perempuan.',
+        'Pantau keberadaan wajah, menoleh kanan/kiri, >1 wajah, dan suara obrolan (pandangan normal ke layar aman). Teguran suara otomatis.',
       highlightCamera: true,
     },
     {
       key: 'requireFullscreen',
-      title: 'Wajib Mode Layar Penuh (Fullscreen)',
+      title: 'Wajib Layar Penuh (Fullscreen)',
       description:
-        'Mengunci layar ujian ke mode fullscreen. Jika siswa keluar dari fullscreen, soal otomatis tertutup layar peringatan merah dan pelanggaran tercatat.',
+        'Mengunci layar ujian ke mode penuh; keluar dari fullscreen langsung memicu peringatan & pelanggaran.',
     },
     {
       key: 'detectTabSwitchAndSplitScreen',
-      title: 'Deteksi Pindah Tab, Window Blur & Split Screen',
+      title: 'Deteksi Pindah Tab, Blur & Split Screen',
       description:
-        'Mendeteksi perpindahan tab browser, kehilangan fokus aplikasi, serta penyusutan ukuran layar (Split Screen / Floating Window HP).',
+        'Mendeteksi perpindahan tab, kehilangan fokus jendela, dan split screen / floating window HP.',
     },
     {
       key: 'detectNotificationBarAndScreenshot',
-      title: 'Larangan Bilah Notifikasi (HP/Tablet) & Proteksi Screenshot',
+      title: 'Larangan Bilah Notifikasi & Proteksi Screenshot',
       description:
-        'Mendeteksi gestur menarik bilah notifikasi di HP/tablet, kehilangan fokus sistem, serta langsung menutup layar dengan tirai hitam saat terdeteksi tombol atau kombinasi tangkapan layar (Screenshot / PrintScreen / Win+Shift+S / Cmd+Shift+3/4).',
+        'Blokir tarikan bilah notifikasi HP/tablet serta langsung tutup layar saat terdeteksi tangkapan layar.',
     },
     {
       key: 'blockRightClickAndCopyPaste',
-      title: 'Blokir Klik Kanan, Copy-Paste & Inspeksi DevTools',
+      title: 'Blokir Klik Kanan, Copy-Paste & DevTools',
       description:
-        'Menonaktifkan klik kanan, seleksi teks, drag-and-drop, Ctrl+C/V/X/P/S/U, F12, dan Ctrl+Shift+I/J/C.',
+        'Menonaktifkan klik kanan, seleksi teks, drag-drop, Ctrl+C/V/X/P/S/U, dan F12/DevTools.',
     },
     {
       key: 'enableDynamicWatermark',
       title: 'Watermark Dinamis Anti-Foto Layar',
       description:
-        'Menampilkan teks transparan melayang berisi NISN, Nama Siswa, dan Waktu di latar belakang area soal untuk mencegah pemotretan layar via HP lain.',
+        'Teks transparan NISN, Nama, dan Waktu melayang di latar soal untuk mencegah pemotretan layar.',
     },
     {
       key: 'showScoreAndExplanationAuto',
       title: 'Tampilkan Nilai & Pembahasan Otomatis',
       description:
-        'Setelah siswa mengumpulkan ujian, nilai akhir, status KKM, dan pembahasan soal langsung ditampilkan secara otomatis.',
+        'Nilai akhir, status KKM, dan pembahasan langsung tampil setelah ujian dikumpulkan.',
     },
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-          Keamanan Global, Tema & Identitas Sekolah
+        <h1 className="text-lg sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+          Keamanan, Tema & Identitas Sekolah
         </h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-          Aktifkan pengawasan kamera, kebijakan anti-curang, kustomisasi tema tampilan, dan identitas sekolah.
+        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          Atur pengawasan anti-curang, tema tampilan, dan profil sekolah.
         </p>
       </div>
 
       {notice && (
         <div
           role="status"
-          className="rounded-lg border border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40 px-4 py-3 text-xs font-medium text-emerald-800 dark:text-emerald-300"
+          className="rounded-lg border border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40 px-3.5 py-2.5 text-xs font-medium text-emerald-800 dark:text-emerald-300"
         >
           {notice}
         </div>
       )}
 
       {/* PENGATURAN TEMA APLIKASI */}
-      <section className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-5">
-        <div className="flex items-start gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
-          <Palette className="h-5 w-5 text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0" />
+      <section className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-6 space-y-3.5 sm:space-y-5">
+        <div className="flex items-start gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <Palette className="h-4 w-4 sm:h-5 sm:w-5 text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0" />
           <div>
-            <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-              Pengaturan Tema Aplikasi
+            <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
+              Tema & Warna Aplikasi
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Sesuaikan mode warna (Terang/Gelap) dan palet aksen utama sesuai identitas sekolah.
+            <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Mode terang/gelap dan warna aksen utama portal.
             </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-12">
           <div className="lg:col-span-4 space-y-2.5">
             <span className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
               Mode Tampilan
@@ -249,17 +249,17 @@ export function GlobalSecuritySettings() {
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-12">
         {/* Global Feature Toggles */}
-        <section className="lg:col-span-7 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-5">
-          <div className="flex items-start gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
-            <ShieldCheck className="h-5 w-5 text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0" />
+        <section className="lg:col-span-7 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-6 space-y-4 sm:space-y-5">
+          <div className="flex items-start gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <ShieldCheck className="h-4 w-4 sm:h-5 sm:w-5 text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0" />
             <div>
-              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Sakelar Fitur Keamanan Anti-Curang
+              <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
+                Sakelar Keamanan Anti-Curang
               </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Seluruh perubahan langsung berlaku pada sesi ujian siswa secara real-time.
+              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Perubahan langsung berlaku real-time di sesi ujian siswa.
               </p>
             </div>
           </div>
@@ -273,16 +273,16 @@ export function GlobalSecuritySettings() {
               return (
                 <div
                   key={item.key}
-                  className="flex items-start justify-between gap-4 py-4 first:pt-0 last:pb-0"
+                  className="flex items-start justify-between gap-3 py-3 sm:py-4 first:pt-0 last:pb-0"
                 >
-                  <div className="space-y-0.5">
+                  <div className="space-y-0.5 min-w-0">
                     <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-900 dark:text-slate-100">
                       {item.highlightCamera && (
                         <Camera className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
                       )}
                       <span>{item.title}</span>
                     </div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                    <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 leading-snug sm:leading-relaxed">
                       {item.description}
                     </p>
                   </div>
@@ -344,16 +344,16 @@ export function GlobalSecuritySettings() {
         {/* School Identity & Announcement Form */}
         <form
           onSubmit={handleSaveSchool}
-          className="lg:col-span-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-4 self-start"
+          className="lg:col-span-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-6 space-y-3.5 sm:space-y-4 self-start"
         >
-          <div className="flex items-start gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
-            <Building2 className="h-5 w-5 text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0" />
+          <div className="flex items-start gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <Building2 className="h-4 w-4 sm:h-5 sm:w-5 text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0" />
             <div>
-              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+              <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
                 Identitas Sekolah & Pengumuman
               </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Ditampilkan pada halaman depan dan kop laporan ujian.
+              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Tampil di halaman depan & kop laporan PDF.
               </p>
             </div>
           </div>
