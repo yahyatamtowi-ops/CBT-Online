@@ -28,7 +28,11 @@ const EMPTY_DELETE_SELECTION: SelectiveDeleteOptions = {
   auditLogs: false,
 };
 
-export function AuditBackupPanel() {
+export function AuditBackupPanel({
+  initialSubMenu = 'cloud',
+}: {
+  initialSubMenu?: AuditSubMenu;
+}) {
   const {
     db,
     exportDatabaseJSON,
@@ -38,7 +42,11 @@ export function AuditBackupPanel() {
     deleteViolationLogs,
     deleteAuditLogs,
   } = useCBT();
-  const [activeSubMenu, setActiveSubMenu] = useState<AuditSubMenu>('cloud');
+  const [activeSubMenu, setActiveSubMenu] = useState<AuditSubMenu>(initialSubMenu);
+
+  React.useEffect(() => {
+    setActiveSubMenu(initialSubMenu);
+  }, [initialSubMenu]);
   const [categoryFilter, setCategoryFilter] = useState<'ALL' | AuditLogEntry['category']>('ALL');
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -316,7 +324,7 @@ export function AuditBackupPanel() {
                     setConfirmReset(false);
                     setStatusMsg({
                       type: 'ok',
-                      text: 'Seluruh data aplikasi berhasil direset ke kondisi awal kosong.',
+                      text: 'Seluruh data aplikasi berhasil direset ke data default (siswa, guru, mata pelajaran, dan soal bawaan).',
                     });
                   }}
                   className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700"

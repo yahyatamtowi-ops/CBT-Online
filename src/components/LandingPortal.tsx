@@ -9,6 +9,7 @@ import {
   Lock,
   Megaphone,
   ShieldCheck,
+  UserCheck,
 } from 'lucide-react';
 import { useCBT } from '../context/CBTContext';
 import {
@@ -18,6 +19,7 @@ import {
 import { StaffLoginPage, type StaffRole } from './StaffLoginPage';
 import { ExamProgressBar } from './student/ExamProgressBar';
 import { FullscreenToggleButton } from './FullscreenToggleButton';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export function SchoolLogo({
   src,
@@ -130,15 +132,22 @@ export function LandingPortal() {
     db.security.requireFullscreen && 'Layar Penuh',
     db.security.requireCameraMonitoring && 'Kamera & Audio Pengawas',
     db.security.detectTabSwitchAndSplitScreen && 'Deteksi Pindah Tab',
+    db.security.detectNotificationBarAndScreenshot !== false &&
+      'Deteksi Screenshot & Bilah Notifikasi',
     db.security.blockRightClickAndCopyPaste && 'Blokir Copy-Paste',
     db.security.enableDynamicWatermark && 'Watermark Dinamis',
   ].filter(Boolean) as string[];
 
+  const proctorEnabled = db.proctorConfig?.enabled !== false;
+
   return (
     <div className="min-h-screen bg-slate-50/90 dark:bg-slate-950/95 text-slate-900 dark:text-slate-100 flex flex-col batik-shell">
-      {/* Top Utility Bar: Fullscreen Bar + Icon-Only Staff Login Triggers */}
+      {/* Top Utility Bar: Fullscreen Bar + PWA Install + Icon-Only Staff Login Triggers */}
       <div className="mx-auto w-full max-w-6xl px-4 pt-4 sm:px-6 sm:pt-5 flex items-center justify-between gap-2">
-        <FullscreenToggleButton variant="landing" />
+        <div className="flex items-center gap-2 flex-wrap">
+          <FullscreenToggleButton variant="landing" />
+          <PWAInstallButton />
+        </div>
         <div
           role="group"
           aria-label="Akses Portal Pengelola"
@@ -153,6 +162,18 @@ export function LandingPortal() {
           >
             <BookOpen className="h-4 w-4" aria-hidden="true" />
           </button>
+          {proctorEnabled && (
+            <button
+              type="button"
+              data-testid="landing-login-proctor-btn"
+              onClick={() => setStaffLoginRole('proctor')}
+              aria-label="Login Pengawas"
+              title="Login Pengawas Ujian"
+              className="inline-flex h-10 w-10 sm:h-9 sm:w-9 items-center justify-center rounded-lg text-slate-600 dark:text-slate-300 transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-950/70 dark:hover:text-indigo-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+            >
+              <UserCheck className="h-4 w-4" aria-hidden="true" />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setStaffLoginRole('admin')}

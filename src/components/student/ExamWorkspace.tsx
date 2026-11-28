@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  DoorOpen,
   Flag,
   LayoutGrid,
   Lock,
@@ -14,9 +15,11 @@ import {
   Mic,
   MicOff,
   Moon,
+  Play,
   Save,
   ShieldAlert,
   Sun,
+  UserCheck,
   Wifi,
   WifiOff,
   X,
@@ -41,6 +44,7 @@ import {
   isQuestionAnswered,
   seededShuffle,
 } from '../../utils/cbtLogic';
+import { cacheStudentExamSnapshot } from '../../utils/offlineExamCache';
 
 type FontSizeOption = 'sm' | 'md' | 'lg';
 type CameraBehaviorStatus =
@@ -76,6 +80,8 @@ export function ExamWorkspace({
     toggleFlagQuestion,
     updateCurrentQuestionIndex,
     recordStudentViolation,
+    requestToiletLeave,
+    returnFromToiletLeave,
     submitStudentExam,
   } = useCBT();
 
@@ -109,7 +115,44 @@ export function ExamWorkspace({
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [confirmChecked, setConfirmChecked] = useState(false);
 
+  // Portrait camera orientation on mobile phones (< 768px) vs landscape on tablet/laptop
+  const [isMobilePortrait, setIsMobilePortrait] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.innerWidth < 768
+  );
+
+  // Active toilet permission leave state (pauses all anti-cheat detections while away)
+  const activeToiletRequest = useMemo(
+    () =>
+      (db.toiletRequests || []).find(
+        (r) =>
+          r.attemptId === attempt.id &&
+          (r.status === 'pending' || r.status === 'confirmed')
+      ) || null,
+    [db.toiletRequests, attempt.id]
+  );
+  const isOnToiletLeave = Boolean(activeToiletRequest);
+  const isOnToiletLeaveRef = useRef<boolean>(isOnToiletLeave);
+  useEffect(() => {
+    isOnToiletLeaveRef.current = isOnToiletLeave;
+  }, [isOnToiletLeave]);
+
+  useEffect(() => {
+    const updateOrientation = () => {
+      setIsMobilePortrait(window.innerWidth < 768);
+    };
+    window.addEventListener('resize', updateOrientation);
+    window.addEventListener('orientationchange', updateOrientation);
+    return () => {
+      window.removeEventListener('resize', updateOrientation);
+      window.removeEventListener('orientationchange', updateOrientation);
+    };
+  }, []);
+
   const lastViolationAtRef = useRef<number>(0);
+  const lastCameraViolationAtRef = useRef<number>(0);
+  const examMountedAtRef = useRef<number>(Date.now());
+  const monitorStartedAtRef = useRef<number>(Date.now());
+  const warningModalOpenRef = useRef<boolean>(false);
   const autoSubmittedRef = useRef<boolean>(false);
   const enteredFullscreenOnceRef = useRef<boolean>(false);
   const screenshotShieldTimerRef = useRef<number | null>(null);
@@ -119,14 +162,38 @@ export function ExamWorkspace({
     h: window.innerHeight,
   });
 
+  useEffect(() => {
+    warningModalOpenRef.current = Boolean(warningModal);
+  }, [warningModal]);
+
   // Camera proctoring refs
+  const analyzerVideoRef = useRef<HTMLVideoElement | null>(null);
   const proctorVideoRef = useRef<HTMLVideoElement | null>(null);
+  const mobileVideoRef = useRef<HTMLVideoElement | null>(null);
   const proctorStreamRef = useRef<MediaStream | null>(null);
   const prevLumaRef = useRef<Uint8Array | null>(null);
   const baselineCentroidXRef = useRef<number | null>(null);
   const baselineCentroidYRef = useRef<number | null>(null);
   const baselineBalanceRef = useRef<number | null>(null);
-  const calibrationSamplesRef = useRef<Array<{ x: number; y: number; bal: number }>>([]);
+  const baselineFaceAreaRef = useRef<number | null>(null);
+  const baselineFaceBoxRef = useRef<{
+    cx: number;
+    cy: number;
+    halfW: number;
+    halfH: number;
+  } | null>(null);
+  const calibrationSamplesRef = useRef<
+    Array<{
+      x: number;
+      y: number;
+      bal: number;
+      area: number;
+      cxPx: number;
+      cyPx: number;
+      halfW: number;
+      halfH: number;
+    }>
+  >([]);
   const turnFramesRef = useRef<number>(0);
   const verticalFramesRef = useRef<number>(0);
   const missingFaceFramesRef = useRef<number>(0);
@@ -136,12 +203,25 @@ export function ExamWorkspace({
     baselineCentroidXRef.current = null;
     baselineCentroidYRef.current = null;
     baselineBalanceRef.current = null;
+    baselineFaceAreaRef.current = null;
+    baselineFaceBoxRef.current = null;
     calibrationSamplesRef.current = [];
     turnFramesRef.current = 0;
     verticalFramesRef.current = 0;
     missingFaceFramesRef.current = 0;
+    speechFramesRef.current = 0;
+    monitorStartedAtRef.current = Date.now();
     setCameraBehaviorStatus('focused');
   }, []);
+
+  // Grant a fresh camera warmup whenever student returns from toilet leave
+  const prevToiletLeaveRef = useRef<boolean>(isOnToiletLeave);
+  useEffect(() => {
+    if (prevToiletLeaveRef.current && !isOnToiletLeave) {
+      resetCameraCalibration();
+    }
+    prevToiletLeaveRef.current = isOnToiletLeave;
+  }, [isOnToiletLeave, resetCameraCalibration]);
 
   // Sync dark mode class on <html> without clobbering global theme on unmount
   useEffect(() => {
@@ -193,6 +273,32 @@ export function ExamWorkspace({
     }
   }, [currentIndex, orderedQuestions.length]);
 
+  // Cache active student exam package, questions, and answers in Service Worker Cache Storage
+  // so exam execution degrades gracefully if internet drops mid-test.
+  useEffect(() => {
+    const studentRecord = db.students.find(
+      (s) => s.id === attempt.studentId || s.nisn === attempt.studentNisn
+    );
+    void cacheStudentExamSnapshot({
+      student: {
+        id: studentRecord?.id || attempt.studentId,
+        nisn: attempt.studentNisn,
+        name: attempt.studentName,
+        className: attempt.className,
+        active: studentRecord?.active ?? true,
+      },
+      examPackage,
+      questions: orderedQuestions,
+      attempt,
+      savedAt: new Date().toISOString(),
+    });
+  }, [
+    attempt,
+    db.students,
+    examPackage,
+    orderedQuestions,
+  ]);
+
   const currentQuestion = orderedQuestions[currentIndex] || orderedQuestions[0];
 
   const remainingSeconds = getRemainingExamSeconds(
@@ -238,6 +344,8 @@ export function ExamWorkspace({
   const triggerViolation = useCallback(
     (type: string, detail: string, requiresFullscreenReturn = false) => {
       if (attempt.status !== 'in_progress') return;
+      // Pause ALL violation triggers while student is on approved/requested toilet leave
+      if (isOnToiletLeaveRef.current) return;
       const now = Date.now();
       // Debounce duplicate simultaneous events (e.g., blur + visibilitychange)
       if (now - lastViolationAtRef.current < 1600) return;
@@ -269,6 +377,7 @@ export function ExamWorkspace({
 
   const activateScreenshotShield = useCallback(
     (type: string, detail: string) => {
+      if (isOnToiletLeaveRef.current) return;
       setScreenshotShieldActive(true);
       if (navigator.clipboard?.writeText) {
         navigator.clipboard.writeText('').catch(() => {});
@@ -322,7 +431,7 @@ export function ExamWorkspace({
     if (attempt.status !== 'in_progress') return;
 
     const handleFullscreenChange = () => {
-      if (!db.security.requireFullscreen) return;
+      if (!db.security.requireFullscreen || isOnToiletLeaveRef.current) return;
       if (document.fullscreenElement) {
         enteredFullscreenOnceRef.current = true;
         setFullscreenBlockedOverlay(false);
@@ -348,6 +457,8 @@ export function ExamWorkspace({
 
     const handleWindowBlur = () => {
       if (!db.security.detectTabSwitchAndSplitScreen) return;
+      // Ignore transient focus loss during the first 4s while browser fullscreen / camera permission prompt settles
+      if (Date.now() - examMountedAtRef.current < 4000) return;
       triggerViolation(
         'Kehilangan Fokus Jendela Browser',
         'Kursor atau fokus jendela berpindah ke aplikasi atau layar lain di luar ujian.'
@@ -356,6 +467,10 @@ export function ExamWorkspace({
 
     const handleResize = () => {
       if (!db.security.detectTabSwitchAndSplitScreen) return;
+      if (Date.now() - examMountedAtRef.current < 4000) {
+        initialSizeRef.current = { w: window.innerWidth, h: window.innerHeight };
+        return;
+      }
       const prevW = initialSizeRef.current.w;
       const prevH = initialSizeRef.current.h;
       const curW = window.innerWidth;
@@ -394,6 +509,16 @@ export function ExamWorkspace({
     }
 
     const handleTouchStart = (e: TouchEvent) => {
+      if (isOnToiletLeaveRef.current) return;
+      // Detect 3-finger screenshot gesture widely used on Android smartphones
+      if (e.touches.length >= 3) {
+        e.preventDefault();
+        activateScreenshotShield(
+          'Percobaan Screenshot (Gestur 3 Jari)',
+          'Terdeteksi gestur 3 jari tangkapan layar pada perangkat HP/tablet.'
+        );
+        return;
+      }
       const firstTouch = e.touches[0];
       if (!firstTouch) return;
       // Top-edge swipe down (notification bar / control center zone on phones & tablets)
@@ -426,7 +551,12 @@ export function ExamWorkspace({
     let wasFocused = document.hasFocus();
     const focusPoll = window.setInterval(() => {
       const nowFocused = document.hasFocus();
-      if (wasFocused && !nowFocused && !document.hidden) {
+      if (
+        Date.now() - examMountedAtRef.current >= 4000 &&
+        wasFocused &&
+        !nowFocused &&
+        !document.hidden
+      ) {
         triggerViolation(
           'Membuka Bilah Notifikasi / Overlay Sistem',
           'Fokus layar ujian terganggu oleh bilah notifikasi atau panel sistem pada perangkat.'
@@ -493,7 +623,26 @@ export function ExamWorkspace({
       );
     };
 
-    window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    // Guard navigator.mediaDevices.getDisplayMedia to catch browser screen capture / screen recording
+    const mediaDevicesObj = navigator.mediaDevices as
+      | (MediaDevices & { getDisplayMedia?: (...args: unknown[]) => Promise<MediaStream> })
+      | undefined;
+    const originalGetDisplayMedia = mediaDevicesObj?.getDisplayMedia?.bind(mediaDevicesObj);
+    if (mediaDevicesObj && typeof originalGetDisplayMedia === 'function') {
+      try {
+        mediaDevicesObj.getDisplayMedia = async () => {
+          activateScreenshotShield(
+            'Percobaan Tangkapan / Rekam Layar (Screen Capture)',
+            'Upaya merekam atau menangkap tampilan layar ujian melalui API screen capture diblokir.'
+          );
+          throw new DOMException('Screen capture diblokir selama ujian berlangsung.', 'NotAllowedError');
+        };
+      } catch {
+        // Ignore read-only mediaDevices property in strict browsers
+      }
+    }
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: false });
     window.addEventListener('touchmove', handleTouchMove, { passive: false });
     window.addEventListener('touchend', handleTouchEnd, { passive: true });
     window.addEventListener('keydown', handleScreenshotKeyDown, { capture: true });
@@ -503,6 +652,13 @@ export function ExamWorkspace({
 
     return () => {
       window.clearInterval(focusPoll);
+      if (mediaDevicesObj && typeof originalGetDisplayMedia === 'function') {
+        try {
+          mediaDevicesObj.getDisplayMedia = originalGetDisplayMedia;
+        } catch {
+          // Ignore restore error
+        }
+      }
       window.removeEventListener('touchstart', handleTouchStart);
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchend', handleTouchEnd);
@@ -583,8 +739,10 @@ export function ExamWorkspace({
     let audioCtx: AudioContext | null = null;
     let analyser: AnalyserNode | null = null;
     let audioBuffer: Float32Array<ArrayBuffer> | null = null;
-    const W = 96;
-    const H = 72;
+    // Use portrait canvas dimensions on phones (72x96) and landscape on tablets/laptops (96x72)
+    // so mobile portrait video frames stay crisp and undistorted for head/face tracking.
+    const W = isMobilePortrait ? 72 : 96;
+    const H = isMobilePortrait ? 96 : 72;
     const offscreen = document.createElement('canvas');
     offscreen.width = W;
     offscreen.height = H;
@@ -616,11 +774,28 @@ export function ExamWorkspace({
     baselineCentroidXRef.current = null;
     baselineCentroidYRef.current = null;
     baselineBalanceRef.current = null;
+    baselineFaceAreaRef.current = null;
+    baselineFaceBoxRef.current = null;
     calibrationSamplesRef.current = [];
     turnFramesRef.current = 0;
     verticalFramesRef.current = 0;
     missingFaceFramesRef.current = 0;
     speechFramesRef.current = 0;
+
+    const attachStreamToVideos = (stream: MediaStream | null) => {
+      for (const el of [
+        analyzerVideoRef.current,
+        proctorVideoRef.current,
+        mobileVideoRef.current,
+      ]) {
+        if (el) {
+          el.srcObject = stream;
+          if (stream) {
+            el.play().catch(() => {});
+          }
+        }
+      }
+    };
 
     const cleanupMedia = () => {
       if (monitorInterval !== null) {
@@ -631,9 +806,7 @@ export function ExamWorkspace({
         proctorStreamRef.current.getTracks().forEach((t) => t.stop());
         proctorStreamRef.current = null;
       }
-      if (proctorVideoRef.current) {
-        proctorVideoRef.current.srcObject = null;
-      }
+      attachStreamToVideos(null);
       if (audioCtx) {
         audioCtx.close().catch(() => {});
         audioCtx = null;
@@ -648,17 +821,20 @@ export function ExamWorkspace({
       }
 
       try {
+        const videoConstraints = isMobilePortrait
+          ? { width: { ideal: 240 }, height: { ideal: 320 }, facingMode: 'user' as const }
+          : { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user' as const };
         let stream: MediaStream;
         let hasAudio = false;
         try {
           stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user' },
+            video: videoConstraints,
             audio: true,
           });
           hasAudio = stream.getAudioTracks().length > 0;
         } catch {
           stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user' },
+            video: videoConstraints,
             audio: false,
           });
           hasAudio = false;
@@ -670,14 +846,11 @@ export function ExamWorkspace({
         }
 
         proctorStreamRef.current = stream;
+        monitorStartedAtRef.current = Date.now();
         setCameraState('active');
         setMicActive(hasAudio);
         setCameraErrorMsg(null);
-
-        if (proctorVideoRef.current) {
-          proctorVideoRef.current.srcObject = stream;
-          proctorVideoRef.current.play().catch(() => {});
-        }
+        attachStreamToVideos(stream);
 
         const videoTrack = stream.getVideoTracks()[0];
         if (videoTrack) {
@@ -706,12 +879,52 @@ export function ExamWorkspace({
           }
         }
 
+        const GRID_COLS = isMobilePortrait ? 9 : 12;
+        const GRID_ROWS = isMobilePortrait ? 12 : 9;
+        const CELL_W = W / GRID_COLS; // 8px
+        const CELL_H = H / GRID_ROWS; // 8px
+        const CAMERA_WARMUP_MS = 6000;
+        const CAMERA_VIOLATION_COOLDOWN_MS = 6000;
+
         let processingFrame = false;
         monitorInterval = window.setInterval(async () => {
           if (cancelled || processingFrame) return;
+          // Pause camera/audio violation evaluation while student is on toilet leave
+          // or while a warning modal is still displayed on screen
+          if (isOnToiletLeaveRef.current || warningModalOpenRef.current) {
+            turnFramesRef.current = 0;
+            verticalFramesRef.current = 0;
+            missingFaceFramesRef.current = 0;
+            speechFramesRef.current = 0;
+            return;
+          }
           processingFrame = true;
           try {
-            const videoEl = proctorVideoRef.current;
+            // Always prefer the non-display:none analyzerVideoRef so phones/tablets decode reliably
+            const videoEl =
+              (analyzerVideoRef.current && analyzerVideoRef.current.readyState >= 2
+                ? analyzerVideoRef.current
+                : null) ||
+              (proctorVideoRef.current && proctorVideoRef.current.readyState >= 2
+                ? proctorVideoRef.current
+                : null) ||
+              (mobileVideoRef.current && mobileVideoRef.current.readyState >= 2
+                ? mobileVideoRef.current
+                : null);
+
+            // Re-attach stream if a preview element mounted after stream activation
+            if (proctorStreamRef.current) {
+              for (const el of [
+                analyzerVideoRef.current,
+                proctorVideoRef.current,
+                mobileVideoRef.current,
+              ]) {
+                if (el && el.srcObject !== proctorStreamRef.current) {
+                  el.srcObject = proctorStreamRef.current;
+                  el.play().catch(() => {});
+                }
+              }
+            }
 
             let horizontalShift = 0;
             let verticalShift = 0;
@@ -719,25 +932,26 @@ export function ExamWorkspace({
             let eyeYawScore = 0;
             let faceDetected = true;
             let faceCount = 1;
+            let faceAreaRatio = 1;
+            let cameraOccluded = false;
+            let faceOutOfBounds = false;
 
             if (videoEl && videoEl.readyState >= 2 && ctx2d) {
               ctx2d.drawImage(videoEl, 0, 0, W, H);
               const imgData = ctx2d.getImageData(0, 0, W, H).data;
               const currentLuma = new Uint8Array(W * H);
+              const skinMask = new Uint8Array(W * H);
+              const cellSkin = new Uint16Array(GRID_COLS * GRID_ROWS);
 
-              let skinCount = 0;
-              let sumSkinX = 0;
-              let sumSkinY = 0;
-              let minSkinX = W;
-              let maxSkinX = 0;
+              let sumLuma = 0;
+              let sumLumaSq = 0;
+              let sampledPixels = 0;
               let leftDiff = 0;
               let rightDiff = 0;
               let regionPixels = 0;
-              let leftHalfSkin = 0;
-              let rightHalfSkin = 0;
-              const skinMask = new Uint8Array(W * H);
 
               for (let y = 4; y < H - 4; y++) {
+                const gy = Math.min(GRID_ROWS - 1, Math.floor(y / CELL_H));
                 for (let x = 6; x < W - 6; x++) {
                   const pIdx = y * W + x;
                   const dIdx = pIdx * 4;
@@ -746,29 +960,29 @@ export function ExamWorkspace({
                   const b = imgData[dIdx + 2];
                   const luma = (r * 77 + g * 150 + b * 29) >> 8;
                   currentLuma[pIdx] = luma;
+                  sumLuma += luma;
+                  sumLumaSq += luma * luma;
+                  sampledPixels += 1;
 
-                  // YCbCr skin-tone segmentation (robust across lighting & skin tones)
+                  // Broad YCbCr skin-tone segmentation (robust across indoor lighting & skin tones)
                   const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
                   const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
                   const isSkin =
-                    luma > 35 &&
-                    cb >= 77 &&
-                    cb <= 127 &&
-                    cr >= 132 &&
-                    cr <= 174;
+                    luma > 22 &&
+                    cb >= 72 &&
+                    cb <= 132 &&
+                    cr >= 128 &&
+                    cr <= 178;
 
                   if (isSkin) {
                     skinMask[pIdx] = 1;
-                    skinCount += 1;
-                    sumSkinX += x;
-                    sumSkinY += y;
-                    if (x < minSkinX) minSkinX = x;
-                    if (x > maxSkinX) maxSkinX = x;
+                    const gx = Math.min(GRID_COLS - 1, Math.floor(x / CELL_W));
+                    cellSkin[gy * GRID_COLS + gx] += 1;
                   }
 
                   if (prevLumaRef.current) {
                     const diff = Math.abs(luma - prevLumaRef.current[pIdx]);
-                    if (diff > 28) {
+                    if (diff > 24) {
                       if (x < W / 2) leftDiff += 1;
                       else rightDiff += 1;
                     }
@@ -779,13 +993,60 @@ export function ExamWorkspace({
 
               prevLumaRef.current = currentLuma;
 
+              if (sampledPixels > 0) {
+                const avgLuma = sumLuma / sampledPixels;
+                const variance = Math.max(
+                  0,
+                  sumLumaSq / sampledPixels - avgLuma * avgLuma
+                );
+                const lumaStd = Math.sqrt(variance);
+                // Detect truly covered lens or pitch-black frame (avoid false occlusion in dim rooms)
+                cameraOccluded = avgLuma < 12 || lumaStd < 6;
+              }
+
+              // Helper to compute left vs right skin balance inside a fixed anchor box
+              const measureBoxSkinBalance = (box: {
+                cx: number;
+                cy: number;
+                halfW: number;
+                halfH: number;
+              }) => {
+                const x0 = Math.max(4, Math.floor(box.cx - box.halfW));
+                const x1 = Math.min(W - 4, Math.ceil(box.cx + box.halfW));
+                const y0 = Math.max(4, Math.floor(box.cy - box.halfH));
+                const y1 = Math.min(H - 4, Math.ceil(box.cy + box.halfH));
+                let leftS = 0;
+                let rightS = 0;
+                for (let y = y0; y < y1; y++) {
+                  for (let x = x0; x < x1; x++) {
+                    if (skinMask[y * W + x]) {
+                      if (x < box.cx) leftS += 1;
+                      else rightS += 1;
+                    }
+                  }
+                }
+                const total = leftS + rightS;
+                return {
+                  total,
+                  balance: total > 14 ? (rightS - leftS) / total : 0,
+                };
+              };
+
               let cxNorm: number | null = null;
               let cyNorm: number | null = null;
               let balanceNorm = 0;
+              let landmarkYaw: number | null = null;
+              let currentFaceArea = 0;
+              let currentBoxPx: {
+                cx: number;
+                cy: number;
+                halfW: number;
+                halfH: number;
+              } | null = null;
 
-              // Prefer native FaceDetector when supported by browser
+              // Prefer native Chrome/Edge FaceDetector when supported by browser
               let usedNative = false;
-              if (nativeDetector) {
+              if (nativeDetector && !cameraOccluded) {
                 try {
                   const faces = await nativeDetector.detect(offscreen);
                   usedNative = true;
@@ -797,79 +1058,187 @@ export function ExamWorkspace({
                     const faceCenterY = primary.y + primary.height / 2;
                     cxNorm = (faceCenterX - W / 2) / (W * 0.42);
                     cyNorm = (faceCenterY - H / 2) / (H * 0.42);
+                    currentFaceArea = primary.width * primary.height;
+                    currentBoxPx = {
+                      cx: faceCenterX,
+                      cy: faceCenterY,
+                      halfW: Math.max(8, primary.width * 0.55),
+                      halfH: Math.max(10, primary.height * 0.55),
+                    };
 
-                    // Compute left/right cheek skin balance inside native face box
-                    for (
-                      let y = Math.max(0, Math.floor(primary.y));
-                      y < Math.min(H, Math.ceil(primary.y + primary.height));
-                      y++
-                    ) {
-                      for (
-                        let x = Math.max(0, Math.floor(primary.x));
-                        x < Math.min(W, Math.ceil(primary.x + primary.width));
-                        x++
+                    // Out-of-bounds check ONLY when face truly exits the outer camera boundary
+                    faceOutOfBounds =
+                      faceCenterX < W * 0.04 ||
+                      faceCenterX > W * 0.96 ||
+                      faceCenterY < H * 0.04 ||
+                      faceCenterY > H * 0.96 ||
+                      primary.width < 8;
+
+                    // Extract real head yaw from native facial landmarks (nose & eyes)
+                    const landmarks = faces[0].landmarks || [];
+                    const noseLm = landmarks.find((lm) => lm.type === 'nose');
+                    const eyeLms = landmarks.filter((lm) => lm.type === 'eye');
+                    if (noseLm?.locations && noseLm.locations.length > 0) {
+                      const noseX = noseLm.locations[0].x;
+                      if (
+                        eyeLms.length >= 2 &&
+                        eyeLms[0].locations?.[0] &&
+                        eyeLms[1].locations?.[0]
                       ) {
-                        if (skinMask[y * W + x]) {
-                          if (x < faceCenterX) leftHalfSkin += 1;
-                          else rightHalfSkin += 1;
-                        }
+                        const e1x = eyeLms[0].locations[0].x;
+                        const e2x = eyeLms[1].locations[0].x;
+                        const leftEyeX = Math.min(e1x, e2x);
+                        const rightEyeX = Math.max(e1x, e2x);
+                        const eyeSpan = Math.max(4, rightEyeX - leftEyeX);
+                        const eyeMidX = (leftEyeX + rightEyeX) / 2;
+                        landmarkYaw = Math.max(
+                          -1,
+                          Math.min(1, (noseX - eyeMidX) / (eyeSpan * 0.55))
+                        );
+                      } else {
+                        landmarkYaw = Math.max(
+                          -1,
+                          Math.min(
+                            1,
+                            (noseX - faceCenterX) / Math.max(6, primary.width * 0.34)
+                          )
+                        );
                       }
                     }
-                    const boxSkinTotal = leftHalfSkin + rightHalfSkin;
-                    if (boxSkinTotal > 12) {
-                      balanceNorm = (rightHalfSkin - leftHalfSkin) / boxSkinTotal;
-                    }
+
+                    // Measure cheek skin balance inside fixed calibrated anchor (or current face box)
+                    const anchorBox = baselineFaceBoxRef.current || currentBoxPx;
+                    balanceNorm = measureBoxSkinBalance(anchorBox).balance;
                   }
                 } catch {
                   usedNative = false;
                 }
               }
 
-              if (!usedNative) {
-                faceDetected = skinCount >= 24;
-                faceCount = faceDetected ? 1 : 0;
-                if (faceDetected) {
-                  const avgX = sumSkinX / skinCount;
-                  const avgY = sumSkinY / skinCount;
-                  cxNorm = (avgX - W / 2) / (W * 0.4);
-                  cyNorm = (avgY - H / 2) / (H * 0.4);
+              if (!usedNative && !cameraOccluded) {
+                // Find the densest 3x3 head-sized skin cluster on the 12x9 spatial grid
+                // so scattered warm walls/desks never fool the detector into thinking a face is present
+                let bestScore = 0;
+                let bestGx = Math.floor(GRID_COLS / 2);
+                let bestGy = Math.floor(GRID_ROWS / 2);
 
-                  // Measure skin distribution left vs right of face center to detect in-place head yaw
-                  const boxMid = (minSkinX + maxSkinX) / 2;
-                  for (let y = 4; y < H - 4; y++) {
-                    for (let x = minSkinX; x <= maxSkinX; x++) {
-                      if (skinMask[y * W + x]) {
-                        if (x < boxMid) leftHalfSkin += 1;
-                        else rightHalfSkin += 1;
+                for (let gy = 1; gy < GRID_ROWS - 1; gy++) {
+                  for (let gx = 1; gx < GRID_COLS - 1; gx++) {
+                    let windowSum = 0;
+                    for (let dy = -1; dy <= 1; dy++) {
+                      for (let dx = -1; dx <= 1; dx++) {
+                        windowSum += cellSkin[(gy + dy) * GRID_COLS + (gx + dx)];
                       }
                     }
-                  }
-                  const totalBoxSkin = leftHalfSkin + rightHalfSkin;
-                  if (totalBoxSkin > 20) {
-                    balanceNorm = (rightHalfSkin - leftHalfSkin) / totalBoxSkin;
+                    if (windowSum > bestScore) {
+                      bestScore = windowSum;
+                      bestGx = gx;
+                      bestGy = gy;
+                    }
                   }
                 }
+
+                // Accumulate face cluster pixels inside a 5x5 head neighborhood around peak
+                const rx0 = Math.max(6, Math.floor((bestGx - 2) * CELL_W));
+                const rx1 = Math.min(W - 6, Math.ceil((bestGx + 3) * CELL_W));
+                const ry0 = Math.max(4, Math.floor((bestGy - 2) * CELL_H));
+                const ry1 = Math.min(H - 4, Math.ceil((bestGy + 3) * CELL_H));
+
+                let clusterSkin = 0;
+                let sumX = 0;
+                let sumY = 0;
+                let cMinX = W;
+                let cMaxX = 0;
+                let cMinY = H;
+                let cMaxY = 0;
+
+                for (let y = ry0; y < ry1; y++) {
+                  for (let x = rx0; x < rx1; x++) {
+                    if (skinMask[y * W + x]) {
+                      clusterSkin += 1;
+                      sumX += x;
+                      sumY += y;
+                      if (x < cMinX) cMinX = x;
+                      if (x > cMaxX) cMaxX = x;
+                      if (y < cMinY) cMinY = y;
+                      if (y > cMaxY) cMaxY = y;
+                    }
+                  }
+                }
+
+                // Keep any visible face inside camera range detected reliably across devices & lighting
+                faceDetected = clusterSkin >= 36 && bestScore >= 18;
+                faceCount = faceDetected ? 1 : 0;
+
+                if (faceDetected) {
+                  const avgX = sumX / clusterSkin;
+                  const avgY = sumY / clusterSkin;
+                  cxNorm = (avgX - W / 2) / (W * 0.4);
+                  cyNorm = (avgY - H / 2) / (H * 0.4);
+                  currentFaceArea = clusterSkin;
+                  currentBoxPx = {
+                    cx: avgX,
+                    cy: avgY,
+                    halfW: Math.max(10, Math.min(24, (cMaxX - cMinX) * 0.55)),
+                    halfH: Math.max(12, Math.min(26, (cMaxY - cMinY) * 0.55)),
+                  };
+
+                  // Only flag out-of-bounds when face exits near the very outer camera boundary
+                  faceOutOfBounds =
+                    avgX < W * 0.04 ||
+                    avgX > W * 0.96 ||
+                    avgY < H * 0.04 ||
+                    avgY > H * 0.96;
+
+                  const anchorBox = baselineFaceBoxRef.current || currentBoxPx;
+                  const anchorStats = measureBoxSkinBalance(anchorBox);
+                  balanceNorm = anchorStats.balance;
+                }
+              } else if (cameraOccluded) {
+                faceDetected = false;
+                faceCount = 0;
               }
 
-              if (faceDetected && cxNorm !== null && cyNorm !== null) {
+              if (
+                faceDetected &&
+                cxNorm !== null &&
+                cyNorm !== null &&
+                currentBoxPx !== null
+              ) {
                 if (
                   baselineCentroidXRef.current === null ||
                   baselineCentroidYRef.current === null ||
-                  baselineBalanceRef.current === null
+                  baselineBalanceRef.current === null ||
+                  baselineFaceAreaRef.current === null ||
+                  baselineFaceBoxRef.current === null
                 ) {
                   calibrationSamplesRef.current.push({
                     x: cxNorm,
                     y: cyNorm,
                     bal: balanceNorm,
+                    area: Math.max(1, currentFaceArea),
+                    cxPx: currentBoxPx.cx,
+                    cyPx: currentBoxPx.cy,
+                    halfW: currentBoxPx.halfW,
+                    halfH: currentBoxPx.halfH,
                   });
-                  if (calibrationSamplesRef.current.length >= 3) {
-                    const n = calibrationSamplesRef.current.length;
+                  if (calibrationSamplesRef.current.length >= 4) {
+                    const samples = calibrationSamplesRef.current;
+                    const n = samples.length;
                     baselineCentroidXRef.current =
-                      calibrationSamplesRef.current.reduce((s, p) => s + p.x, 0) / n;
+                      samples.reduce((s, p) => s + p.x, 0) / n;
                     baselineCentroidYRef.current =
-                      calibrationSamplesRef.current.reduce((s, p) => s + p.y, 0) / n;
+                      samples.reduce((s, p) => s + p.y, 0) / n;
                     baselineBalanceRef.current =
-                      calibrationSamplesRef.current.reduce((s, p) => s + p.bal, 0) / n;
+                      samples.reduce((s, p) => s + p.bal, 0) / n;
+                    baselineFaceAreaRef.current =
+                      samples.reduce((s, p) => s + p.area, 0) / n;
+                    baselineFaceBoxRef.current = {
+                      cx: samples.reduce((s, p) => s + p.cxPx, 0) / n,
+                      cy: samples.reduce((s, p) => s + p.cyPx, 0) / n,
+                      halfW: samples.reduce((s, p) => s + p.halfW, 0) / n,
+                      halfH: samples.reduce((s, p) => s + p.halfH, 0) / n,
+                    };
                   }
                 } else {
                   horizontalShift = Math.max(
@@ -880,27 +1249,40 @@ export function ExamWorkspace({
                     -1,
                     Math.min(1, cyNorm - baselineCentroidYRef.current)
                   );
-                  eyeYawScore = Math.max(
+                  const anchorYaw = Math.max(
                     -1,
                     Math.min(1, balanceNorm - baselineBalanceRef.current)
                   );
-                  // Gently adapt baseline only during small natural posture shifts
+                  eyeYawScore =
+                    landmarkYaw !== null && Math.abs(landmarkYaw) >= Math.abs(anchorYaw)
+                      ? landmarkYaw
+                      : anchorYaw;
+                  faceAreaRatio =
+                    baselineFaceAreaRef.current > 0
+                      ? currentFaceArea / baselineFaceAreaRef.current
+                      : 1;
+
+                  // Adapt baseline very slowly ONLY when squarely centered and full-size
                   if (
-                    Math.abs(horizontalShift) < 0.16 &&
-                    Math.abs(eyeYawScore) < 0.18
+                    Math.abs(horizontalShift) < 0.08 &&
+                    Math.abs(eyeYawScore) < 0.10 &&
+                    faceAreaRatio > 0.78 &&
+                    faceAreaRatio < 1.25
                   ) {
                     baselineCentroidXRef.current =
-                      baselineCentroidXRef.current * 0.98 + cxNorm * 0.02;
+                      baselineCentroidXRef.current * 0.992 + cxNorm * 0.008;
                     baselineBalanceRef.current =
-                      baselineBalanceRef.current * 0.98 + balanceNorm * 0.02;
+                      baselineBalanceRef.current * 0.992 + balanceNorm * 0.008;
+                    baselineFaceAreaRef.current =
+                      baselineFaceAreaRef.current * 0.992 + currentFaceArea * 0.008;
                   }
                 }
               }
 
               if (regionPixels > 0) {
                 const totalMoved = leftDiff + rightDiff;
-                const asymmetry = Math.abs(leftDiff - rightDiff) / (regionPixels * 0.42);
-                lateralMotionScore = totalMoved > 85 ? Math.min(1, asymmetry * 1.4) : 0;
+                const asymmetry = Math.abs(leftDiff - rightDiff) / (regionPixels * 0.36);
+                lateralMotionScore = totalMoved > 70 ? Math.min(1, asymmetry * 1.55) : 0;
               }
             }
 
@@ -915,6 +1297,10 @@ export function ExamWorkspace({
               setAudioLevelPct(Math.min(100, Math.round(audioRms * 450)));
             }
 
+            const nowTime = Date.now();
+            const inWarmupGrace = nowTime - monitorStartedAtRef.current < CAMERA_WARMUP_MS;
+            const isCalibrating = baselineCentroidXRef.current === null;
+
             const evaluation = evaluateCameraBehavior({
               horizontalShift,
               verticalShift,
@@ -922,11 +1308,16 @@ export function ExamWorkspace({
               eyeYawScore,
               faceDetected,
               faceCount,
+              faceAreaRatio,
+              cameraOccluded,
+              faceOutOfBounds,
               audioRms,
               consecutiveTurnFrames: turnFramesRef.current,
               consecutiveSpeechFrames: speechFramesRef.current,
               consecutiveMissingFaceFrames: missingFaceFramesRef.current,
               consecutiveVerticalFrames: verticalFramesRef.current,
+              inWarmupGrace,
+              isCalibrating,
             });
 
             turnFramesRef.current = evaluation.nextTurnFrames;
@@ -938,14 +1329,16 @@ export function ExamWorkspace({
             if (
               evaluation.shouldFlagViolation &&
               evaluation.violationType &&
-              evaluation.violationDetail
+              evaluation.violationDetail &&
+              nowTime - lastCameraViolationAtRef.current >= CAMERA_VIOLATION_COOLDOWN_MS
             ) {
+              lastCameraViolationAtRef.current = nowTime;
               triggerViolation(evaluation.violationType, evaluation.violationDetail);
             }
           } finally {
             processingFrame = false;
           }
-        }, 550);
+        }, 500);
       } catch {
         if (!cancelled) {
           setCameraState('denied');
@@ -967,6 +1360,7 @@ export function ExamWorkspace({
     attempt.status,
     cameraRetryNonce,
     db.security.requireCameraMonitoring,
+    isMobilePortrait,
     triggerViolation,
   ]);
 
@@ -1058,12 +1452,10 @@ export function ExamWorkspace({
       : cameraBehaviorStatus === 'multiple_faces'
         ? '>1 Wajah!'
         : cameraBehaviorStatus === 'no_face'
-          ? 'Wajah Hilang!'
+          ? 'Keluar Kamera!'
           : cameraBehaviorStatus === 'talking'
-            ? 'Suara Terdeteksi'
-            : cameraBehaviorStatus === 'looking_away'
-              ? 'Wajah Menoleh!'
-              : 'Wajah Fokus';
+            ? 'Suara Mengobrol!'
+            : 'Wajah Terpantau';
 
   return (
     <div
@@ -1072,6 +1464,17 @@ export function ExamWorkspace({
         db.security.blockRightClickAndCopyPaste ? 'exam-no-select' : ''
       }`}
     >
+      {/* Always-mounted non-display:none video element so camera frame decoding works on phones, tablets & laptops */}
+      {db.security.requireCameraMonitoring && (
+        <video
+          ref={analyzerVideoRef}
+          autoPlay
+          playsInline
+          muted
+          aria-hidden="true"
+          className="pointer-events-none fixed top-0 left-0 h-2 w-2 opacity-[0.01] -z-10"
+        />
+      )}
       {/* Offline Warning Banner */}
       {!isOnline && (
         <div
@@ -1179,11 +1582,77 @@ export function ExamWorkspace({
         </div>
       </header>
 
-      {/* Main Viewport-Fitted Two-Column Exam Layout (Tablet & Desktop fit 100% screen height) */}
-      <main className="relative mx-auto w-full max-w-7xl flex-1 md:min-h-0 md:overflow-hidden grid grid-cols-1 md:grid-cols-12 gap-3.5 px-4 py-3 sm:px-5">
+      {/* Main Exam Layout (Mobile elevates Prev/Next naturally above bottom bar; Tablet & Desktop fit 100% screen height) */}
+      <main className="relative mx-auto w-full max-w-7xl md:flex-1 md:min-h-0 md:overflow-hidden grid grid-cols-1 md:grid-cols-12 gap-2.5 md:gap-3.5 px-3.5 pt-2.5 pb-16 sm:px-5 md:py-3">
+        {/* Portrait Mobile Camera Monitor Strip (< md): Taller portrait preview for spacious head & shoulder framing */}
+        {db.security.requireCameraMonitoring && (
+          <div
+            data-testid="mobile-camera-strip"
+            className="md:hidden flex items-center justify-between gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2 text-xs"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div
+                data-testid="mobile-camera-preview"
+                className="relative h-24 w-[72px] aspect-[3/4] shrink-0 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-900 flex items-center justify-center"
+              >
+                <video
+                  ref={mobileVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={`h-full w-full object-cover -scale-x-100 ${
+                    cameraState === 'active' ? 'block' : 'hidden'
+                  }`}
+                />
+                {cameraState !== 'active' && (
+                  <CameraOff className="h-4 w-4 text-slate-400" />
+                )}
+              </div>
+              <div className="min-w-0 space-y-0.5">
+                <div
+                  className={`font-semibold text-xs truncate ${
+                    cameraState !== 'active'
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : cameraBehaviorStatus === 'focused'
+                        ? 'text-emerald-700 dark:text-emerald-400'
+                        : 'text-amber-600 dark:text-amber-400'
+                  }`}
+                >
+                  {cameraStatusLabel}
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Kamera Potret Aktif
+                </div>
+                <div className="text-[10px] font-mono text-slate-400 dark:text-slate-500 tabular-nums">
+                  Pelanggaran: {attempt.violationCount}/{db.security.maxViolationTolerance}
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-col items-end gap-1.5 shrink-0">
+              {cameraState === 'active' ? (
+                <button
+                  type="button"
+                  onClick={resetCameraCalibration}
+                  className="shrink-0 rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 dark:text-indigo-300"
+                >
+                  Kalibrasi
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setCameraRetryNonce((n) => n + 1)}
+                  className="shrink-0 rounded-md bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white"
+                >
+                  Aktifkan
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Question Area (Protected with Dynamic Watermark) */}
         <section
-          className={`relative md:col-span-8 xl:col-span-9 md:h-full md:min-h-0 rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 p-4 sm:p-5 overflow-hidden flex flex-col ${
+          className={`relative md:col-span-8 xl:col-span-9 md:h-full md:min-h-0 rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 p-3.5 sm:p-5 overflow-hidden flex flex-col ${
             screenshotShieldActive ? 'blur-xl brightness-0' : ''
           }`}
         >
@@ -1208,7 +1677,7 @@ export function ExamWorkspace({
           )}
 
           {/* Header Bar (Pinned inside Question Card) */}
-          <div className="relative z-20 shrink-0 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-2.5">
+          <div className="relative z-20 shrink-0 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-2">
             <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
               <span className="font-mono text-sm font-bold text-slate-900 dark:text-slate-100">
                 Soal {currentIndex + 1} dari {orderedQuestions.length}
@@ -1227,12 +1696,25 @@ export function ExamWorkspace({
               </span>
             </div>
 
-            <div className="flex items-center gap-2.5 text-xs">
+            <div className="flex items-center gap-2 text-xs">
               <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-medium">
                 {isOnline ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5 text-amber-600" />}
                 <Save className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">{lastSavedText}</span>
               </span>
+              <button
+                type="button"
+                data-testid="student-toilet-leave-btn"
+                onClick={() => {
+                  setWarningModal(null);
+                  setFullscreenBlockedOverlay(false);
+                  requestToiletLeave(attempt.id, 'Izin ke Toilet');
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-sky-300 dark:border-sky-700 bg-sky-50 dark:bg-sky-950/50 px-2.5 py-1 text-xs font-semibold text-sky-800 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/50 transition-colors whitespace-nowrap"
+              >
+                <DoorOpen className="h-3.5 w-3.5" />
+                <span>Izin</span>
+              </button>
               <button
                 type="button"
                 onClick={() => toggleFlagQuestion(attempt.id, currentQuestion.id)}
@@ -1248,10 +1730,10 @@ export function ExamWorkspace({
             </div>
           </div>
 
-          {/* Scrollable Question Body (scrolls internally only if a question is unusually tall) */}
-          <div className="relative z-20 flex-1 min-h-0 overflow-y-auto py-3 pr-1 space-y-3">
+          {/* Question Body (Natural height on Mobile so Prev/Next stay elevated; internal scroll on Tablet/Desktop) */}
+          <div className="relative z-20 md:flex-1 md:min-h-0 md:overflow-y-auto py-2.5 md:py-3 pr-0.5 md:pr-1 space-y-2.5 md:space-y-3">
             {/* Prompt & Optional Diagram */}
-            <div className="space-y-3">
+            <div className="space-y-2.5 md:space-y-3">
               <p className={`${fontSizeClass} font-medium text-slate-900 dark:text-slate-100`}>
                 {currentQuestion.prompt}
               </p>
@@ -1262,14 +1744,14 @@ export function ExamWorkspace({
                     src={currentQuestion.imageUrl}
                     alt={`Diagram soal nomor ${currentIndex + 1}`}
                     referrerPolicy="no-referrer"
-                    className="max-h-44 w-full object-contain rounded"
+                    className="max-h-40 md:max-h-44 w-full object-contain rounded"
                   />
                 </div>
               )}
             </div>
 
             {/* Answer Controls by Question Type */}
-            <div className="pt-1 space-y-2">
+            <div className="pt-0.5 md:pt-1 space-y-2">
               {/* SINGLE CHOICE */}
               {currentQuestion.type === 'single_choice' && (
                 <div className="space-y-2" role="radiogroup" aria-label="Pilihan jawaban">
@@ -1283,7 +1765,7 @@ export function ExamWorkspace({
                         role="radio"
                         aria-checked={selected}
                         onClick={() => handleAnswerChange(currentQuestion.id, opt.id)}
-                        className={`flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors ${
+                        className={`flex w-full items-start gap-2.5 md:gap-3 rounded-xl border p-2.5 md:p-3 text-left transition-colors ${
                           selected
                             ? 'border-indigo-600 bg-indigo-50/80 text-indigo-950 dark:border-indigo-500 dark:bg-indigo-950/50 dark:text-indigo-100'
                             : 'border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200 dark:hover:bg-slate-800'
@@ -1457,13 +1939,17 @@ export function ExamWorkspace({
             </div>
           </div>
 
-          {/* Bottom Prev / Next Controls (Always Visible at Bottom of Screen on Tablet/Desktop) */}
-          <div className="relative z-20 shrink-0 mt-2 flex items-center justify-between gap-3 border-t border-slate-100 dark:border-slate-800 pt-3">
+          {/* Bottom Prev / Next Controls (Elevated naturally on Mobile; pinned neatly inside viewport on Tablet/Desktop) */}
+          <div
+            data-testid="exam-nav-controls"
+            className="relative z-20 shrink-0 mt-1.5 md:mt-2 flex items-center justify-between gap-2.5 border-t border-slate-100 dark:border-slate-800 pt-2.5 md:pt-3"
+          >
             <button
               type="button"
+              data-testid="exam-prev-btn"
               disabled={currentIndex === 0}
               onClick={() => handleSelectQuestion(currentIndex - 1)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 md:px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap"
             >
               <ChevronLeft className="h-4 w-4" />
               <span>Soal Sebelumnya</span>
@@ -1472,8 +1958,9 @@ export function ExamWorkspace({
             {currentIndex < orderedQuestions.length - 1 ? (
               <button
                 type="button"
+                data-testid="exam-next-btn"
                 onClick={() => handleSelectQuestion(currentIndex + 1)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 md:px-5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
               >
                 <span>Soal Berikutnya</span>
                 <ChevronRight className="h-4 w-4" />
@@ -1481,11 +1968,12 @@ export function ExamWorkspace({
             ) : (
               <button
                 type="button"
+                data-testid="exam-finish-btn"
                 onClick={() => {
                   setConfirmChecked(false);
                   setShowSubmitModal(true);
                 }}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 md:px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 whitespace-nowrap"
               >
                 <CheckCircle2 className="h-4 w-4" />
                 <span>Selesaikan Ujian</span>
@@ -1669,8 +2157,97 @@ export function ExamWorkspace({
         </aside>
       </main>
 
+      {/* FULL-SCREEN TOILET LEAVE MODE OVERLAY (PAUSES ALL ANTI-CHEAT DETECTIONS) */}
+      {isOnToiletLeave && activeToiletRequest && (
+        <div
+          data-testid="toilet-leave-overlay"
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-950/95 p-5 text-white"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-sky-500/40 bg-slate-900 p-6 sm:p-7 text-center space-y-5 shadow-2xl">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-500/15 text-sky-400 ring-1 ring-sky-400/30">
+              <DoorOpen className="h-7 w-7" />
+            </div>
+
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-sky-400">
+                Mode Izin Aktif · Pengawasan Dijeda
+              </p>
+              <h2 className="text-xl font-bold text-white">
+                Sedang Izin ke Toilet
+              </h2>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Layar soal disembunyikan sementara dan seluruh deteksi pelanggaran (kamera, fokus layar, &amp; layar penuh) dihentikan sejenak selama Anda izin.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 rounded-xl border border-slate-800 bg-slate-950/70 p-3.5 text-xs">
+              <div>
+                <div className="text-[11px] text-slate-400">Durasi Izin</div>
+                <div className="mt-0.5 font-mono text-base font-bold text-sky-300 tabular-nums">
+                  {formatSecondsToClock(
+                    Math.max(
+                      0,
+                      Math.floor(
+                        (nowMs - (Date.parse(activeToiletRequest.requestedAt) || nowMs)) /
+                          1000
+                      )
+                    )
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] text-slate-400">Sisa Waktu Ujian</div>
+                <div className="mt-0.5 font-mono text-base font-bold text-white tabular-nums">
+                  {formatSecondsToClock(remainingSeconds)}
+                </div>
+              </div>
+            </div>
+
+            {activeToiletRequest.status === 'confirmed' ? (
+              <div
+                data-testid="toilet-leave-confirmed-status"
+                className="flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-950/50 px-4 py-3 text-xs font-semibold text-emerald-300"
+              >
+                <UserCheck className="h-4 w-4 shrink-0" />
+                <span>
+                  Izin dikonfirmasi oleh {activeToiletRequest.confirmedByName || 'Pengawas'}
+                </span>
+              </div>
+            ) : (
+              <div
+                data-testid="toilet-leave-pending-status"
+                className="flex items-center justify-center gap-2 rounded-xl border border-amber-500/40 bg-amber-950/40 px-4 py-3 text-xs font-medium text-amber-200"
+              >
+                <Clock className="h-4 w-4 shrink-0 text-amber-400" />
+                <span>
+                  Notifikasi telah dikirim ke Guru, Pengawas &amp; Admin. Menunggu konfirmasi...
+                </span>
+              </div>
+            )}
+
+            <button
+              type="button"
+              data-testid="resume-after-toilet-btn"
+              onClick={() => {
+                returnFromToiletLeave(activeToiletRequest.id);
+                resetCameraCalibration();
+                if (db.security.requireFullscreen && !document.fullscreenElement) {
+                  requestEnterFullscreen();
+                }
+              }}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition-colors hover:bg-indigo-500"
+            >
+              <Play className="h-4 w-4" />
+              <span>Lanjutkan Menjawab Soal</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* FULL-SCREEN OPAQUE ANTI-SCREENSHOT SHIELD OVERLAY */}
-      {screenshotShieldActive && (
+      {screenshotShieldActive && !isOnToiletLeave && (
         <div
           data-testid="screenshot-shield-overlay"
           role="alert"

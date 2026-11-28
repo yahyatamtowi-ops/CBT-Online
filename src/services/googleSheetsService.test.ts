@@ -18,23 +18,27 @@ test('safeGoogleSheetCell escapes formula injection prefixes cleanly', () => {
 
 test('buildCbtSheetPayload generates all 6 CBT sheet tabs with header and data rows', () => {
   const db = createInitialSeedDatabase();
-  db.students.push({
-    id: 'stu_1',
-    nisn: '0090001001',
-    name: 'Andi Pratama',
-    className: 'X-1',
-    active: true,
-  });
-  db.teachers.push({
-    id: 'tch_1',
-    username: 'hendra',
-    nip: '19800101',
-    name: 'Drs. Hendra',
-    password: 'secret',
-    subjects: ['Matematika'],
-    classes: ['X-1'],
-    active: true,
-  });
+  db.students = [
+    {
+      id: 'stu_1',
+      nisn: '0090001001',
+      name: 'Andi Pratama',
+      className: 'X-1',
+      active: true,
+    },
+  ];
+  db.teachers = [
+    {
+      id: 'tch_1',
+      username: 'hendra',
+      nip: '19800101',
+      name: 'Drs. Hendra',
+      password: 'secret',
+      subjects: ['Matematika'],
+      classes: ['X-1'],
+      active: true,
+    },
+  ];
 
   const payload = buildCbtSheetPayload(db);
   for (const tab of CBT_SHEET_TABS) {

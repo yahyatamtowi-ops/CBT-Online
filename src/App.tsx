@@ -3,15 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { LandingPortal } from './components/LandingPortal';
+import { OfflineStatusBanner } from './components/OfflineStatusBanner';
 import { OpeningSplash } from './components/OpeningSplash';
 import { TransitionLoader } from './components/TransitionLoader';
 import { AdminPortal } from './components/admin/AdminPortal';
+import { ProctorPortal } from './components/proctor/ProctorPortal';
 import { StudentPortal } from './components/student/StudentPortal';
 import { TeacherPortal } from './components/teacher/TeacherPortal';
 import { CBTProvider, useCBT } from './context/CBTContext';
 import { FirestoreErrorBoundary } from './components/FirestoreErrorBoundary';
+import { registerExamServiceWorker } from './utils/offlineExamCache';
 
 function shouldSkipIntro(): boolean {
   if (typeof window === 'undefined') return false;
@@ -34,6 +37,8 @@ function PortalRouter() {
     activePortal = <AdminPortal />;
   } else if (session.role === 'teacher') {
     activePortal = <TeacherPortal />;
+  } else if (session.role === 'proctor') {
+    activePortal = <ProctorPortal />;
   } else {
     activePortal = <StudentPortal />;
   }
@@ -41,6 +46,7 @@ function PortalRouter() {
   return (
     <>
       {activePortal}
+      <OfflineStatusBanner />
       {showSplash && (
         <OpeningSplash
           logoUrl={db.school.logoUrl}
@@ -58,6 +64,10 @@ function PortalRouter() {
 }
 
 export default function App() {
+  useEffect(() => {
+    void registerExamServiceWorker();
+  }, []);
+
   return (
     <FirestoreErrorBoundary>
       <CBTProvider>

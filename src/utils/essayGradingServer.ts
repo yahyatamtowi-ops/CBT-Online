@@ -67,14 +67,15 @@ export async function gradeEssaysWithGemini(items: EssayGradeRequestItem[]): Pro
     });
 
     const systemInstruction = [
-      'Anda adalah guru evaluator ujian SMA profesional di Indonesia yang menilai soal esai secara objektif dan adil.',
-      'TUGAS: Bandingkan jawaban siswa dengan kunci jawaban dan kata kunci konsep.',
-      'ATURAN PENILAIAN SEMANTIK:',
-      '1. Fokus pada KETEPATAN MAKNA / MAKSUD / KONSEP INTI, BUKAN kesamaan kata persis.',
-      '2. Jika siswa menggunakan diksi, sinonim, atau susunan kalimat yang berbeda namun maksud/maknanya SAMA dengan kunci jawaban, berikan scoreRatio tinggi (0.85 - 1.0).',
-      '3. Jika jawaban hanya mencakup sebagian konsep kunci, berikan scoreRatio proporsional (0.30 - 0.80) sesuai kelengkapan konsep.',
-      '4. Jika jawaban kosong, menyimpang, atau bertentangan dengan kunci jawaban, berikan scoreRatio 0.0 - 0.15.',
-      '5. Berikan feedback singkat (1 kalimat Bahasa Indonesia) yang menjelaskan tingkat kesesuaian jawaban siswa.',
+      'Anda adalah guru evaluator ujian SMA senior di Indonesia yang menilai soal esai dengan ketelitian akademik tinggi, objektif, dan adil.',
+      'TUGAS: Analisis setiap soal (prompt), kunci jawaban acuan (answerKey), kata kunci konsep (keywords), dan jawaban siswa (studentAnswer).',
+      'RUBRIK PENILAIAN SEMANTIK PRESISI TINGGI:',
+      '1. KETEPATAN MAKNA & PARAFRASE: Fokus pada kebenaran konsep inti, hubungan sebab-akibat, dan maksud ilmiah, BUKAN kesamaan kata persis. Jika siswa memakai diksi/sinonim/struktur kalimat berbeda tetapi maknanya akurat dan lengkap, berikan scoreRatio 0.90 - 1.00.',
+      '2. KELENGKAPAN POIN INTI: Pecah kunci jawaban menjadi poin-poin konsep utama. Jika siswa hanya menjelaskan sebagian poin dengan benar, hitung proporsinya secara teliti (misal 2 dari 3 poin inti = 0.65 - 0.72; 1 dari 3 poin = 0.30 - 0.40).',
+      '3. DETEKSI NEGASI & KONTRADIKSI: Perhatikan kata negasi ("tidak", "bukan", "tanpa", "menurun" vs "meningkat", "salah" vs "benar"). Jika jawaban siswa membalik makna atau bertentangan secara konsep dengan kunci jawaban, berikan scoreRatio 0.00 - 0.15 meskipun banyak kata yang mirip.',
+      '4. KETELITIAN ANGKA, TAHUN & RUMUS: Jika kunci jawaban memuat angka, satuan, rumus kimia/fisika, atau tanggal/tahun penting, jawaban siswa harus akurat secara matematis/ilmiah; nilai yang keliru mengurangi skor secara signifikan.',
+      '5. TOLAK SALIN SOAL / JAWABAN NGAWUR: Jika siswa hanya menyalin ulang kalimat pertanyaan, menulis jawaban terlalu umum tanpa substansi, atau mengisi teks acak/kosong, berikan scoreRatio 0.00 - 0.10.',
+      '6. UMPAN BALIK ANALITIS: Tulis 1 kalimat Bahasa Indonesia yang ringkas dan jelas menyebutkan konsep yang sudah tepat atau poin penting yang masih kurang/keliru.',
     ].join('\n');
 
     const response = await ai.models.generateContent({
@@ -82,7 +83,6 @@ export async function gradeEssaysWithGemini(items: EssayGradeRequestItem[]): Pro
       contents: JSON.stringify(sanitizedItems),
       config: {
         systemInstruction,
-        temperature: 0.1,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -95,11 +95,11 @@ export async function gradeEssaysWithGemini(items: EssayGradeRequestItem[]): Pro
                   questionId: { type: Type.STRING },
                   scoreRatio: {
                     type: Type.NUMBER,
-                    description: 'Skor ketepatan makna dari 0.0 sampai 1.0',
+                    description: 'Skor ketepatan makna presisi dari 0.0 sampai 1.0',
                   },
                   feedback: {
                     type: Type.STRING,
-                    description: 'Umpan balik singkat dalam Bahasa Indonesia (maksimal 1 kalimat)',
+                    description: 'Umpan balik analitis singkat dalam Bahasa Indonesia (maksimal 1 kalimat)',
                   },
                 },
                 required: ['questionId', 'scoreRatio', 'feedback'],

@@ -111,17 +111,23 @@ const sampleQuestions: Question[] = [
   },
 ];
 
-test('initial seed database uses SMA Negeri 1 Kabun defaults and empty user tables', () => {
+test('initial seed database uses SMA Negeri 1 Kabun defaults with built-in students, teachers, subjects, and questions', () => {
   const seed = createInitialSeedDatabase();
   assert.equal(seed.school.schoolName, 'SMA Negeri 1 Kabun');
   assert.equal(seed.school.logoUrl, DEFAULT_SCHOOL_LOGO);
   assert.equal(seed.adminAccount.username, 'smansakabun');
   assert.equal(seed.adminAccount.password, 'Smansakabun123!');
   assert.equal(seed.security.requireCameraMonitoring, true);
-  assert.equal(seed.students.length, 0);
-  assert.equal(seed.teachers.length, 0);
-  assert.equal(seed.classes.length, 0);
-  assert.equal(seed.packages.length, 0);
+  assert.equal(seed.students.length, 498);
+  assert.equal(seed.teachers.length, 2);
+  assert.equal(seed.classes.length, 15);
+  assert.equal(seed.packages.length, 1);
+  assert.equal(seed.questions.length, 50);
+  assert.equal(seed.attempts.length, 0);
+  assert.equal(seed.violations.length, 0);
+  // Ensure each call returns isolated deep clones
+  seed.students.pop();
+  assert.equal(createInitialSeedDatabase().students.length, 498);
 });
 
 test('evaluateQuestionCorrectness handles all 4 question types accurately', () => {
@@ -309,34 +315,39 @@ test('evaluateViolationEscalation locks exam once violations exceed tolerance', 
   assert.equal(evaluateViolationEscalation(3, sec).shouldAutoLock, true);
 });
 
-test('evaluateCameraBehavior detects sustained sideways head turn and talking violations without flagging minor glances', () => {
+test('evaluateCameraBehavior ignores normal in-frame movements and flags out-of-frame movement with talking audio', () => {
   const focused = evaluateCameraBehavior({
-    horizontalShift: 0.14,
-    eyeYawScore: -0.22,
-    lateralMotionScore: 0.16,
+    horizontalShift: 0.36,
+    eyeYawScore: -0.45,
+    lateralMotionScore: 0.35,
     audioRms: 0.01,
-    consecutiveTurnFrames: 0,
+    faceDetected: true,
+    faceCount: 1,
+    consecutiveTurnFrames: 5,
     consecutiveSpeechFrames: 0,
   });
   assert.equal(focused.status, 'focused');
   assert.equal(focused.shouldFlagViolation, false);
 
-  const lookingRight = evaluateCameraBehavior({
-    horizontalShift: 0.34,
+  const outOfFrameAndTalking = evaluateCameraBehavior({
+    horizontalShift: 0,
     lateralMotionScore: 0.25,
-    audioRms: 0.01,
-    consecutiveTurnFrames: 2,
-    consecutiveSpeechFrames: 0,
+    audioRms: 0.14,
+    faceDetected: false,
+    faceCount: 0,
+    consecutiveTurnFrames: 0,
+    consecutiveSpeechFrames: 2,
+    consecutiveMissingFaceFrames: 2,
   });
-  assert.equal(lookingRight.shouldFlagViolation, true);
-  assert.match(lookingRight.violationType ?? '', /Menoleh Kanan/i);
+  assert.equal(outOfFrameAndTalking.shouldFlagViolation, true);
+  assert.match(outOfFrameAndTalking.violationType ?? '', /Keluar Jangkauan Kamera & Suara Mengobrol/i);
 
   const talking = evaluateCameraBehavior({
     horizontalShift: 0.02,
     lateralMotionScore: 0.02,
     audioRms: 0.14,
     consecutiveTurnFrames: 0,
-    consecutiveSpeechFrames: 2,
+    consecutiveSpeechFrames: 4,
   });
   assert.equal(talking.shouldFlagViolation, true);
   assert.match(talking.violationType ?? '', /Mengobrol/i);
@@ -1484,19 +1495,22 @@ test('teacher-activated packages (allowIndependentAccess) bypass admin schedule 
   assert.equal(login.examPackage?.id, 'pkg-uts-guru');
 });
 
-test('calibrated evaluateCameraBehavior ignores looking down and eye glances, while catching clear head turns, missing face, and multiple faces', () => {
-  // Subtle eye glance / small natural posture shift stays focused
-  const subtleGlance = evaluateCameraBehavior({
-    horizontalShift: 0.15,
-    eyeYawScore: -0.25,
-    lateralMotionScore: 0.18,
-    audioRms: 0.01,
-    consecutiveTurnFrames: 2,
+test('calibrated evaluateCameraBehavior never flags in-frame movements/head turns and strictly catches out-of-frame, talking, occluded lens, and multiple faces', () => {
+  // Subtle eye glance / natural head turn / posture shift inside frame stays focused
+  const inFrameTurn = evaluateCameraBehavior({
+    horizontalShift: -0.42,
+    eyeYawScore: -0.55,
+    lateralMotionScore: 0.4,
+    audioRms: 0.02,
+    faceDetected: true,
+    faceCount: 1,
+    faceAreaRatio: 0.72,
+    consecutiveTurnFrames: 6,
     consecutiveSpeechFrames: 0,
   });
-  assert.equal(subtleGlance.status, 'focused');
-  assert.equal(subtleGlance.shouldFlagViolation, false);
-  assert.equal(subtleGlance.nextTurnFrames, 0);
+  assert.equal(inFrameTurn.status, 'focused');
+  assert.equal(inFrameTurn.shouldFlagViolation, false);
+  assert.equal(inFrameTurn.nextTurnFrames, 0);
 
   // Looking down toward tablet/laptop/phone screen beneath top camera stays focused
   const lookDownAtScreen = evaluateCameraBehavior({
@@ -1506,6 +1520,7 @@ test('calibrated evaluateCameraBehavior ignores looking down and eye glances, wh
     audioRms: 0.01,
     faceDetected: true,
     faceCount: 1,
+    faceAreaRatio: 0.85,
     consecutiveTurnFrames: 0,
     consecutiveSpeechFrames: 0,
     consecutiveVerticalFrames: 4,
@@ -1514,44 +1529,23 @@ test('calibrated evaluateCameraBehavior ignores looking down and eye glances, wh
   assert.equal(lookDownAtScreen.shouldFlagViolation, false);
   assert.equal(lookDownAtScreen.nextVerticalFrames, 0);
 
-  // Deliberate sustained head turn left triggers violation on 3rd consecutive frame
-  const yawStep1 = evaluateCameraBehavior({
-    horizontalShift: -0.18,
-    eyeYawScore: -0.46,
-    lateralMotionScore: 0.12,
-    audioRms: 0.01,
+  // Combined out-of-frame + talking triggers high-confidence violation on 3rd frame (~1.5s)
+  const outAndTalking = evaluateCameraBehavior({
+    horizontalShift: 0,
+    lateralMotionScore: 0,
+    audioRms: 0.13,
+    faceDetected: false,
+    faceCount: 0,
     consecutiveTurnFrames: 0,
-    consecutiveSpeechFrames: 0,
+    consecutiveSpeechFrames: 2,
+    consecutiveMissingFaceFrames: 2,
   });
-  assert.equal(yawStep1.status, 'looking_away');
-  assert.equal(yawStep1.shouldFlagViolation, false);
-  assert.equal(yawStep1.nextTurnFrames, 1);
+  assert.equal(outAndTalking.status, 'no_face');
+  assert.equal(outAndTalking.shouldFlagViolation, true);
+  assert.match(outAndTalking.violationType ?? '', /Keluar Jangkauan Kamera & Suara Mengobrol/i);
 
-  const yawStep2 = evaluateCameraBehavior({
-    horizontalShift: -0.18,
-    eyeYawScore: -0.46,
-    lateralMotionScore: 0.12,
-    audioRms: 0.01,
-    consecutiveTurnFrames: yawStep1.nextTurnFrames,
-    consecutiveSpeechFrames: 0,
-  });
-  assert.equal(yawStep2.shouldFlagViolation, false);
-  assert.equal(yawStep2.nextTurnFrames, 2);
-
-  const yawStep3 = evaluateCameraBehavior({
-    horizontalShift: -0.18,
-    eyeYawScore: -0.46,
-    lateralMotionScore: 0.12,
-    audioRms: 0.01,
-    consecutiveTurnFrames: yawStep2.nextTurnFrames,
-    consecutiveSpeechFrames: 0,
-  });
-  assert.equal(yawStep3.shouldFlagViolation, true);
-  assert.match(yawStep3.violationType ?? '', /Wajah Menoleh Kanan \/ Kiri/i);
-  assert.match(yawStep3.violationDetail ?? '', /ke kiri/i);
-
-  // Missing face triggers on 3rd consecutive frame
-  const noFace = evaluateCameraBehavior({
+  // Sustained out-of-frame (silent) triggers after 6 consecutive frames (~3.0s)
+  const noFaceStep5 = evaluateCameraBehavior({
     horizontalShift: 0,
     lateralMotionScore: 0,
     audioRms: 0,
@@ -1559,13 +1553,72 @@ test('calibrated evaluateCameraBehavior ignores looking down and eye glances, wh
     faceCount: 0,
     consecutiveTurnFrames: 0,
     consecutiveSpeechFrames: 0,
-    consecutiveMissingFaceFrames: 2,
+    consecutiveMissingFaceFrames: 4,
   });
-  assert.equal(noFace.status, 'no_face');
-  assert.equal(noFace.shouldFlagViolation, true);
-  assert.match(noFace.violationType ?? '', /Wajah Tidak Terdeteksi/i);
+  assert.equal(noFaceStep5.status, 'no_face');
+  assert.equal(noFaceStep5.shouldFlagViolation, false);
 
-  // Multiple faces triggers on 2nd consecutive frame
+  const noFaceStep6 = evaluateCameraBehavior({
+    horizontalShift: 0,
+    lateralMotionScore: 0,
+    audioRms: 0,
+    faceDetected: false,
+    faceCount: 0,
+    consecutiveTurnFrames: 0,
+    consecutiveSpeechFrames: 0,
+    consecutiveMissingFaceFrames: 5,
+  });
+  assert.equal(noFaceStep6.status, 'no_face');
+  assert.equal(noFaceStep6.shouldFlagViolation, true);
+  assert.match(noFaceStep6.violationType ?? '', /Wajah Keluar Jangkauan Kamera/i);
+
+  // Visible face inside camera frame with moderate distance (faceAreaRatio: 0.20) MUST stay focused
+  const visibleFaceInFrame = evaluateCameraBehavior({
+    horizontalShift: 0.1,
+    lateralMotionScore: 0.05,
+    audioRms: 0,
+    faceDetected: true,
+    faceCount: 1,
+    faceAreaRatio: 0.20,
+    consecutiveTurnFrames: 0,
+    consecutiveSpeechFrames: 0,
+    consecutiveMissingFaceFrames: 5,
+  });
+  assert.equal(visibleFaceInFrame.status, 'focused');
+  assert.equal(visibleFaceInFrame.shouldFlagViolation, false);
+
+  // Truly collapsed/out-of-frame face (faceAreaRatio < 0.12) triggers no_face on 6th frame
+  const outOfFrameArea = evaluateCameraBehavior({
+    horizontalShift: 0.1,
+    lateralMotionScore: 0.05,
+    audioRms: 0,
+    faceDetected: true,
+    faceCount: 1,
+    faceAreaRatio: 0.10,
+    consecutiveTurnFrames: 0,
+    consecutiveSpeechFrames: 0,
+    consecutiveMissingFaceFrames: 5,
+  });
+  assert.equal(outOfFrameArea.status, 'no_face');
+  assert.equal(outOfFrameArea.shouldFlagViolation, true);
+
+  // Covered / pitch-dark camera triggers occluded violation detail on 6th frame
+  const occludedCam = evaluateCameraBehavior({
+    horizontalShift: 0,
+    lateralMotionScore: 0,
+    audioRms: 0,
+    faceDetected: false,
+    faceCount: 0,
+    cameraOccluded: true,
+    consecutiveTurnFrames: 0,
+    consecutiveSpeechFrames: 0,
+    consecutiveMissingFaceFrames: 5,
+  });
+  assert.equal(occludedCam.status, 'no_face');
+  assert.equal(occludedCam.shouldFlagViolation, true);
+  assert.match(occludedCam.violationDetail ?? '', /tertutup|gelap/i);
+
+  // Multiple faces triggers on 4th consecutive frame (~2.0s)
   const multiFace = evaluateCameraBehavior({
     horizontalShift: 0,
     lateralMotionScore: 0,
@@ -1574,7 +1627,7 @@ test('calibrated evaluateCameraBehavior ignores looking down and eye glances, wh
     faceCount: 2,
     consecutiveTurnFrames: 0,
     consecutiveSpeechFrames: 0,
-    consecutiveMissingFaceFrames: 1,
+    consecutiveMissingFaceFrames: 3,
   });
   assert.equal(multiFace.status, 'multiple_faces');
   assert.equal(multiFace.shouldFlagViolation, true);

@@ -5,11 +5,12 @@ import {
   BookOpen,
   Lock,
   ShieldCheck,
+  UserCheck,
 } from 'lucide-react';
 import { useCBT } from '../context/CBTContext';
 import { SchoolLogo } from './LandingPortal';
 
-export type StaffRole = 'teacher' | 'admin';
+export type StaffRole = 'teacher' | 'proctor' | 'admin';
 
 interface StaffLoginPageProps {
   initialRole: StaffRole;
@@ -20,11 +21,14 @@ export function StaffLoginPage({
   initialRole,
   onBackToStudent,
 }: StaffLoginPageProps) {
-  const { db, loginTeacher, loginAdmin } = useCBT();
+  const { db, loginTeacher, loginProctor, loginAdmin } = useCBT();
   const [role, setRole] = useState<StaffRole>(initialRole);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  const proctorEnabled = db.proctorConfig?.enabled !== false;
+  const allowTeacherAsProctor = db.proctorConfig?.allowTeacherAccountsAsProctor !== false;
 
   const handleRoleSwitch = (nextRole: StaffRole) => {
     setRole(nextRole);
@@ -39,11 +43,27 @@ export function StaffLoginPage({
     if (role === 'teacher') {
       const res = loginTeacher(username, password);
       if (!res.ok) setError(res.error || 'Gagal masuk ke Portal Guru.');
+    } else if (role === 'proctor') {
+      const res = loginProctor(username, password);
+      if (!res.ok) setError(res.error || 'Gagal masuk ke Portal Pengawas.');
     } else {
       const res = loginAdmin(username, password);
       if (!res.ok) setError(res.error || 'Gagal masuk ke Portal Super Admin.');
     }
   };
+
+  const userInputId =
+    role === 'teacher'
+      ? 'teacher-user'
+      : role === 'proctor'
+        ? 'proctor-user'
+        : 'admin-user';
+  const passInputId =
+    role === 'teacher'
+      ? 'teacher-pass'
+      : role === 'proctor'
+        ? 'proctor-pass'
+        : 'admin-pass';
 
   return (
     <div
@@ -87,35 +107,50 @@ export function StaffLoginPage({
           <div
             role="tablist"
             aria-label="Pilih Portal Pengelola"
-            className="grid grid-cols-2 gap-1.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 p-1"
+            className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 dark:bg-slate-800/80 p-1"
           >
             <button
               type="button"
               role="tab"
               aria-selected={role === 'teacher'}
               onClick={() => handleRoleSwitch('teacher')}
-              className={`inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
+              className={`inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
                 role === 'teacher'
                   ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
               }`}
             >
-              <BookOpen className="h-4 w-4 shrink-0" />
-              <span>Portal Guru</span>
+              <BookOpen className="h-3.5 w-3.5 shrink-0" />
+              <span>Guru</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              data-testid="staff-tab-proctor"
+              aria-selected={role === 'proctor'}
+              onClick={() => handleRoleSwitch('proctor')}
+              className={`inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
+                role === 'proctor'
+                  ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+              }`}
+            >
+              <UserCheck className="h-3.5 w-3.5 shrink-0" />
+              <span>Pengawas</span>
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={role === 'admin'}
               onClick={() => handleRoleSwitch('admin')}
-              className={`inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
+              className={`inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
                 role === 'admin'
                   ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
               }`}
             >
-              <ShieldCheck className="h-4 w-4 shrink-0" />
-              <span>Super Admin</span>
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+              <span>Admin</span>
             </button>
           </div>
 
@@ -123,14 +158,32 @@ export function StaffLoginPage({
             <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
               {role === 'teacher'
                 ? 'Masuk Portal Guru'
-                : 'Masuk Portal Super Admin'}
+                : role === 'proctor'
+                  ? 'Masuk Portal Pengawas Ujian'
+                  : 'Masuk Portal Super Admin'}
             </h2>
             <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
               {role === 'teacher'
                 ? 'Kelola paket ujian, bank soal, serta pantau nilai kelas Anda.'
-                : 'Kendali penuh manajemen pengguna, jadwal sesi, tema, dan keamanan.'}
+                : role === 'proctor'
+                  ? allowTeacherAsProctor
+                    ? 'Pantau ujian & buka kunci siswa. Bisa masuk dengan akun Pengawas atau akun Guru.'
+                    : 'Pantau ujian & buka kunci siswa menggunakan akun Pengawas dari Super Admin.'
+                  : 'Kendali penuh manajemen pengguna, jadwal sesi, tema, dan keamanan.'}
             </p>
           </div>
+
+          {role === 'proctor' && !proctorEnabled && (
+            <div
+              role="alert"
+              className="mt-4 flex items-start gap-2.5 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3.5 py-3 text-xs text-amber-900 dark:text-amber-200"
+            >
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <span>
+                Mode Pengawas Ujian saat ini dinonaktifkan oleh Super Admin. Aktifkan melalui menu Keamanan &amp; Pengaturan jika ujian menggunakan pengawas.
+              </span>
+            </div>
+          )}
 
           {error && (
             <div
@@ -145,15 +198,19 @@ export function StaffLoginPage({
           <form onSubmit={handleSubmit} className="mt-5 space-y-4">
             <div>
               <label
-                htmlFor={role === 'teacher' ? 'teacher-user' : 'admin-user'}
+                htmlFor={userInputId}
                 className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
               >
                 {role === 'teacher'
                   ? 'Username / NIP'
-                  : 'Username Administrator'}
+                  : role === 'proctor'
+                    ? allowTeacherAsProctor
+                      ? 'Username Pengawas / NIP Guru'
+                      : 'Username Pengawas'
+                    : 'Username Administrator'}
               </label>
               <input
-                id={role === 'teacher' ? 'teacher-user' : 'admin-user'}
+                id={userInputId}
                 type="text"
                 autoFocus
                 autoComplete="username"
@@ -165,7 +222,9 @@ export function StaffLoginPage({
                 placeholder={
                   role === 'teacher'
                     ? 'Masukkan username atau NIP'
-                    : 'Masukkan username administrator'
+                    : role === 'proctor'
+                      ? 'Masukkan username pengawas'
+                      : 'Masukkan username administrator'
                 }
                 className="w-full min-h-[44px] rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
               />
@@ -173,13 +232,13 @@ export function StaffLoginPage({
 
             <div>
               <label
-                htmlFor={role === 'teacher' ? 'teacher-pass' : 'admin-pass'}
+                htmlFor={passInputId}
                 className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
               >
                 Password
               </label>
               <input
-                id={role === 'teacher' ? 'teacher-pass' : 'admin-pass'}
+                id={passInputId}
                 type="password"
                 autoComplete="current-password"
                 value={password}
@@ -194,20 +253,24 @@ export function StaffLoginPage({
 
             <button
               type="submit"
-              className="w-full min-h-[46px] rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+              disabled={role === 'proctor' && !proctorEnabled}
+              className="w-full min-h-[46px] rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700 disabled:text-slate-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
             >
               {role === 'teacher'
                 ? 'Masuk Dashboard Guru'
-                : 'Masuk Konsol Super Admin'}
+                : role === 'proctor'
+                  ? 'Masuk Portal Pengawas'
+                  : 'Masuk Konsol Super Admin'}
             </button>
           </form>
         </div>
 
         <p className="mt-5 flex items-center justify-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 text-center">
           <Lock className="h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" />
-          <span>Akses khusus pendidik dan administrator resmi sekolah.</span>
+          <span>Akses khusus pendidik, pengawas ujian, dan administrator resmi sekolah.</span>
         </p>
       </main>
     </div>
   );
 }
+

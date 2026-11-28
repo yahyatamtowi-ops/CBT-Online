@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Activity,
   BellRing,
@@ -6,22 +6,17 @@ import {
   FileText,
   LogOut,
   Printer,
-  ShieldAlert,
-  Siren,
-  X,
 } from 'lucide-react';
 import { useCBT } from '../../context/CBTContext';
-import type { ViolationLog } from '../../types/cbt';
-import {
-  classifyViolation,
-  evaluateIncomingCriticalAlerts,
-  formatViolationClock,
-  type CriticalViolationAlert,
-} from '../../utils/violationAnalytics';
 import { SchoolLogo } from '../LandingPortal';
 import { ScrollToTopButton } from '../ScrollToTopButton';
 import { FullscreenToggleButton } from '../FullscreenToggleButton';
 import { DraggableFloatingMenu } from '../DraggableFloatingMenu';
+import {
+  LiveProctorToastHub,
+  LockedExamNotifications,
+} from '../LiveProctorToastHub';
+import { ToiletPermissionNotifications } from '../ToiletPermissionNotifications';
 import { ExamPackageManager } from './ExamPackageManager';
 import { PrintResultsPanel } from './PrintResultsPanel';
 import { ProctoringAnalytics } from './ProctoringAnalytics';
@@ -46,96 +41,6 @@ function getBrowserNotificationPermission(): DesktopPushPermission {
     return 'unsupported';
   }
   return Notification.permission;
-}
-
-function playViolationPingSound() {
-  try {
-    const AudioCtx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.16);
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.24);
-    window.setTimeout(() => {
-      ctx.close().catch(() => {});
-    }, 320);
-  } catch {
-    // Ignore autoplay or Web Audio restrictions
-  }
-}
-
-function playCriticalAlertSound() {
-  try {
-    const AudioCtx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const pulses = [0, 0.18, 0.36];
-    pulses.forEach((offset) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(1046, ctx.currentTime + offset);
-      osc.frequency.setValueAtTime(784, ctx.currentTime + offset + 0.08);
-      gain.gain.setValueAtTime(0.11, ctx.currentTime + offset);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + offset + 0.15);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(ctx.currentTime + offset);
-      osc.stop(ctx.currentTime + offset + 0.16);
-    });
-    window.setTimeout(() => {
-      ctx.close().catch(() => {});
-    }, 650);
-  } catch {
-    // Ignore autoplay or Web Audio restrictions
-  }
-}
-
-function dispatchCriticalDesktopPush(
-  alert: CriticalViolationAlert,
-  onClickFocus: () => void
-): boolean {
-  if (typeof window === 'undefined' || typeof Notification === 'undefined') {
-    return false;
-  }
-  if (Notification.permission !== 'granted') return false;
-  try {
-    const tags = alert.categories.map((c) => c.englishTag).join(', ');
-    const notification = new Notification(
-      `CRITICAL VIOLATION — ${alert.studentName} (${alert.className})`,
-      {
-        body: `${alert.countInWindow}x pelanggaran berat dalam ${alert.windowSeconds} detik (${tags}) pada ${alert.packageTitle} pukul ${alert.clockTime}.`,
-        tag: `critical-${alert.studentNisn}-${alert.packageId}`,
-        requireInteraction: true,
-      }
-    );
-    notification.onclick = () => {
-      try {
-        window.focus();
-      } catch {
-        // Ignore window focus errors
-      }
-      onClickFocus();
-      notification.close();
-    };
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function TeacherPortal() {
@@ -184,10 +89,6 @@ export function TeacherPortal() {
       return true;
     }
   });
-  const [liveToastViolation, setLiveToastViolation] =
-    useState<ViolationLog | null>(null);
-  const [liveCriticalAlert, setLiveCriticalAlert] =
-    useState<CriticalViolationAlert | null>(null);
 
   const teacherViolations = useMemo(
     () =>
@@ -254,82 +155,10 @@ export function TeacherPortal() {
     }
   };
 
-  // Track IDs known at mount so only newly incoming violations trigger live toast / critical push
-  const knownIdsRef = useRef<Set<string> | null>(null);
-  const toastTimerRef = useRef<number | null>(null);
-  const criticalTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (knownIdsRef.current === null) {
-      knownIdsRef.current = new Set(teacherViolations.map((v) => v.id));
-      return;
-    }
-
-    const newlyArrived = teacherViolations.filter(
-      (v) => !knownIdsRef.current!.has(v.id)
-    );
-    if (newlyArrived.length === 0) return;
-
-    for (const v of newlyArrived) {
-      knownIdsRef.current.add(v.id);
-    }
-
-    // Evaluate automated 30-second Critical Violation burst rule
-    const criticalAlerts = evaluateIncomingCriticalAlerts({
-      allTeacherViolations: teacherViolations,
-      newlyArrivedViolations: newlyArrived,
-    });
-
-    if (criticalAlerts.length > 0) {
-      const topCritical = criticalAlerts[0];
-      setLiveCriticalAlert(topCritical);
-      setLiveToastViolation(null);
-
-      if (desktopPushEnabled && getBrowserNotificationPermission() === 'granted') {
-        dispatchCriticalDesktopPush(topCritical, () => {
-          setActiveTab('alerts');
-        });
-      }
-
-      if (soundEnabled) {
-        playCriticalAlertSound();
-      }
-
-      if (criticalTimerRef.current) {
-        window.clearTimeout(criticalTimerRef.current);
-      }
-      criticalTimerRef.current = window.setTimeout(() => {
-        setLiveCriticalAlert(null);
-      }, 14_000);
-      return;
-    }
-
-    // Standard single violation toast
-    const newest = newlyArrived[0];
-    setLiveToastViolation(newest);
-
-    if (soundEnabled) {
-      playViolationPingSound();
-    }
-
-    if (toastTimerRef.current) {
-      window.clearTimeout(toastTimerRef.current);
-    }
-    toastTimerRef.current = window.setTimeout(() => {
-      setLiveToastViolation(null);
-    }, 9000);
-  }, [teacherViolations, soundEnabled, desktopPushEnabled]);
-
-  useEffect(() => {
-    return () => {
-      if (toastTimerRef.current) {
-        window.clearTimeout(toastTimerRef.current);
-      }
-      if (criticalTimerRef.current) {
-        window.clearTimeout(criticalTimerRef.current);
-      }
-    };
-  }, []);
+  const myPackageIdList = useMemo(
+    () => myPackages.map((p) => p.id),
+    [myPackages]
+  );
 
   const handleMarkAllRead = () => {
     const next = new Set(readViolationIds);
@@ -409,12 +238,6 @@ export function TeacherPortal() {
   const activeNav = navItems.find((n) => n.id === activeTab);
   const activeLabel = activeNav?.label || '';
   const activeShortLabel = activeNav?.shortLabel || activeLabel;
-  const toastCategory = liveToastViolation
-    ? classifyViolation(liveToastViolation.type, liveToastViolation.detail)
-    : null;
-  const toastClock = liveToastViolation
-    ? formatViolationClock(liveToastViolation.timestamp)
-    : null;
 
   return (
     <div className="min-h-screen bg-slate-50/90 dark:bg-slate-950/95 text-slate-900 dark:text-slate-100 flex batik-shell">
@@ -552,111 +375,34 @@ export function TeacherPortal() {
           </div>
         </header>
 
-        {/* Escalated CRITICAL VIOLATION floating banner (>=2 high-severity flags in 30s) */}
-        {liveCriticalAlert && (
-          <div
-            role="alert"
-            aria-live="assertive"
-            data-testid="critical-violation-alert-banner"
-            className="fixed bottom-20 right-4 lg:bottom-6 lg:right-6 z-50 w-[calc(100vw-2rem)] max-w-md rounded-xl border-2 border-red-600 bg-red-600 text-white shadow-2xl p-4"
-          >
-            <div className="flex items-start gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/15">
-                <Siren className="h-5 w-5 text-white animate-pulse" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-red-100">
-                    CRITICAL VIOLATION · {liveCriticalAlert.clockTime}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Tutup peringatan kritis"
-                    onClick={() => setLiveCriticalAlert(null)}
-                    className="rounded p-0.5 text-red-100 hover:bg-white/15 hover:text-white"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <div className="mt-1 text-sm font-bold leading-snug">
-                  {liveCriticalAlert.studentName} ({liveCriticalAlert.className})
-                </div>
-                <div className="mt-0.5 text-xs text-red-50">
-                  {liveCriticalAlert.countInWindow}x pelanggaran berat dalam{' '}
-                  {liveCriticalAlert.windowSeconds} detik:{' '}
-                  <span className="font-semibold">
-                    {liveCriticalAlert.categories
-                      .map((c) => c.englishTag)
-                      .join(', ')}
-                  </span>
-                </div>
-                <div className="mt-2.5 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveTab('alerts');
-                      setLiveCriticalAlert(null);
-                    }}
-                    className="rounded-md bg-white px-2.5 py-1 text-[11px] font-bold text-red-700 hover:bg-red-50"
-                  >
-                    Tindak Lanjuti Sekarang
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Standard real-time floating toast when a single violation arrives */}
-        {!liveCriticalAlert && liveToastViolation && toastCategory && toastClock && (
-          <div
-            role="alert"
-            aria-live="assertive"
-            data-testid="realtime-violation-toast"
-            className="fixed bottom-20 right-4 lg:bottom-6 lg:right-6 z-50 w-[calc(100vw-2rem)] max-w-sm rounded-xl border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 shadow-xl ring-1 ring-rose-500/20 p-4"
-          >
-            <div className="flex items-start gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400">
-                <ShieldAlert className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-bold uppercase tracking-wide text-rose-600 dark:text-rose-400">
-                    Pelanggaran Baru · {toastClock.time}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Tutup notifikasi pelanggaran"
-                    onClick={() => setLiveToastViolation(null)}
-                    className="rounded p-0.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <div className="mt-1 text-xs font-bold text-slate-900 dark:text-slate-100">
-                  {toastCategory.label} ({toastCategory.englishTag})
-                </div>
-                <div className="mt-0.5 text-xs text-slate-600 dark:text-slate-300 truncate">
-                  {liveToastViolation.studentName} · {liveToastViolation.className}
-                </div>
-                <div className="mt-2.5 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveTab('alerts');
-                      setLiveToastViolation(null);
-                    }}
-                    className="rounded-md bg-rose-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-700"
-                  >
-                    Lihat Log
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Unified real-time floating notifications: locked exams, toilet leave, critical & single violations */}
+        <LiveProctorToastHub
+          role="teacher"
+          allowedPackageIds={myPackageIdList}
+          soundEnabled={soundEnabled}
+          desktopPushEnabled={
+            desktopPushEnabled && desktopPushPermission === 'granted'
+          }
+          onOpenViolations={() => setActiveTab('alerts')}
+          onOpenMonitoring={(pkgId) => {
+            if (pkgId) setSelectedPackageId(pkgId);
+            setActiveTab('proctoring');
+          }}
+        />
 
         <main className="flex-1 p-3 pb-16 sm:p-6 sm:pb-16 lg:p-8 lg:pb-10 max-w-7xl w-full mx-auto">
+          <LockedExamNotifications
+            role="teacher"
+            allowedPackageIds={myPackageIdList}
+            onOpenMonitoring={(pkgId) => {
+              if (pkgId) setSelectedPackageId(pkgId);
+              setActiveTab('proctoring');
+            }}
+          />
+          <ToiletPermissionNotifications
+            role="teacher"
+            allowedPackageIds={myPackageIdList}
+          />
           {activeTab === 'packages' && (
             <ExamPackageManager
               teacher={teacher}

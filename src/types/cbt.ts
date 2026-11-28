@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'teacher' | 'student';
+export type Role = 'admin' | 'teacher' | 'proctor' | 'student';
 
 export type QuestionType =
   | 'single_choice'
@@ -68,6 +68,51 @@ export interface TeacherAccount {
   subjects: string[];
   classes: string[];
   active: boolean;
+}
+
+export interface ProctorAccount {
+  id: string;
+  username: string;
+  nip?: string;
+  name: string;
+  password: string;
+  assignedPackageIds: string[];
+  assignedClasses: string[];
+  active: boolean;
+}
+
+export interface TeacherProctorAssignment {
+  assignedPackageIds: string[];
+  assignedClasses: string[];
+}
+
+export interface ProctorConfig {
+  /** Master Admin toggle: aktifkan/nonaktifkan penggunaan pengawas ujian (opsional) */
+  enabled: boolean;
+  /** Izinkan akun Guru untuk login pada portal Pengawas */
+  allowTeacherAccountsAsProctor: boolean;
+  /** Penugasan paket & kelas khusus untuk akun Guru saat berperan sebagai Pengawas */
+  teacherAssignments: Record<string, TeacherProctorAssignment>;
+}
+
+export type ToiletPermissionStatus = 'pending' | 'confirmed' | 'returned';
+
+export interface ToiletPermissionRequest {
+  id: string;
+  attemptId: string;
+  studentId: string;
+  studentNisn: string;
+  studentName: string;
+  className: string;
+  packageId: string;
+  packageTitle: string;
+  reason: string;
+  status: ToiletPermissionStatus;
+  requestedAt: string;
+  confirmedAt?: string;
+  confirmedByName?: string;
+  confirmedByRole?: Role;
+  returnedAt?: string;
 }
 
 export interface StudentRecord {
@@ -232,14 +277,17 @@ export interface CBTDatabase {
   school: SchoolIdentity;
   security: GlobalSecurityConfig;
   schedule: SessionScheduleConfig;
+  proctorConfig: ProctorConfig;
   spreadsheetSync: SpreadsheetSyncConfig;
   classes: string[];
   teachers: TeacherAccount[];
+  proctors: ProctorAccount[];
   students: StudentRecord[];
   packages: ExamPackage[];
   questions: Question[];
   attempts: ExamAttempt[];
   violations: ViolationLog[];
+  toiletRequests: ToiletPermissionRequest[];
   auditLogs: AuditLogEntry[];
 }
 
@@ -250,4 +298,7 @@ export interface ActiveSession {
   nisn?: string;
   className?: string;
   packageId?: string;
+  proctorSource?: 'proctor' | 'teacher';
+  assignedPackageIds?: string[];
+  assignedClasses?: string[];
 }

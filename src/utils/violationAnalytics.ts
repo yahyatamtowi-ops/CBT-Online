@@ -112,6 +112,8 @@ export function classifyViolation(
   if (
     text.includes('wajah tidak terdeteksi') ||
     text.includes('wajah hilang') ||
+    text.includes('keluar jangkauan kamera') ||
+    text.includes('keluar dari jangkauan kamera') ||
     text.includes('face out of frame') ||
     text.includes('out of frame') ||
     text.includes('kamera dinonaktifkan') ||
@@ -123,9 +125,16 @@ export function classifyViolation(
 
   if (
     text.includes('screenshot') ||
+    text.includes('screenshoot') ||
     text.includes('tangkapan layar') ||
+    text.includes('tangkap layar') ||
+    text.includes('rekam layar') ||
+    text.includes('screen capture') ||
+    text.includes('snipping') ||
     text.includes('cetak layar') ||
-    text.includes('print screen')
+    text.includes('print screen') ||
+    text.includes('printscreen') ||
+    text.includes('gestur 3 jari')
   ) {
     return VIOLATION_CATEGORIES.screenshot_print;
   }

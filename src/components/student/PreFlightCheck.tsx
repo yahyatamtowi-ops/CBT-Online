@@ -79,18 +79,22 @@ export function PreFlightCheck({
     setCameraError(null);
 
     try {
+      const isMobilePortrait = window.innerWidth < 768;
+      const videoConstraints = isMobilePortrait
+        ? { width: { ideal: 240 }, height: { ideal: 320 }, facingMode: 'user' as const }
+        : { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user' as const };
       let stream: MediaStream;
       let hasAudio = false;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user' },
+          video: videoConstraints,
           audio: true,
         });
         hasAudio = stream.getAudioTracks().length > 0;
       } catch {
         // Fallback to video-only if microphone hardware is absent
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user' },
+          video: videoConstraints,
           audio: false,
         });
         hasAudio = false;
@@ -404,7 +408,7 @@ export function PreFlightCheck({
 
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
               <div className="sm:col-span-5">
-                <div className="relative aspect-video w-full overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-900 flex items-center justify-center">
+                <div className="relative aspect-[3/4] max-w-[190px] mx-auto sm:max-w-none sm:aspect-video w-full overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-900 flex items-center justify-center">
                   {cameraStatus === 'ready' ? (
                     <video
                       ref={videoRef}
@@ -487,6 +491,11 @@ export function PreFlightCheck({
                 {db.security.detectTabSwitchAndSplitScreen && (
                   <li>
                     Dilarang berpindah tab browser, membuka aplikasi lain, atau menggunakan fitur Split Screen / jendela mengambang.
+                  </li>
+                )}
+                {db.security.detectNotificationBarAndScreenshot !== false && (
+                  <li>
+                    Dilarang mengambil tangkapan layar (Screenshot / Rekam Layar) atau membuka bilah notifikasi HP/tablet selama ujian berlangsung.
                   </li>
                 )}
                 {db.security.blockRightClickAndCopyPaste && (

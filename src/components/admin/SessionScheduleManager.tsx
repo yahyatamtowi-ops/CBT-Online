@@ -8,15 +8,23 @@ import {
   FileSpreadsheet,
   KeyRound,
   ListChecks,
+  Plus,
   Power,
   ShieldCheck,
+  Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import { useCBT } from '../../context/CBTContext';
+import type { ExamCategory } from '../../types/cbt';
 import {
   generateExamScheduleCSVTemplate,
   parseExamSchedulesCSV,
 } from '../../utils/examScheduleImport';
+import {
+  downloadXlsxFromCsv,
+  readTabularImportFile,
+} from '../../utils/spreadsheetImport';
 
 type ScheduleSubTab = 'controls' | 'registered' | 'bulk_import';
 
@@ -38,10 +46,24 @@ export function SessionScheduleManager() {
     updateScheduleConfig,
     forceFinishAllExams,
     togglePackagePublished,
+    deleteExamPackage,
+    upsertExamPackage,
     importExamSchedulesBatch,
   } = useCBT();
   const [subTab, setSubTab] = useState<ScheduleSubTab>('controls');
   const [confirmForceOpen, setConfirmForceOpen] = useState(false);
+  const [confirmDeletePkgId, setConfirmDeletePkgId] = useState<string | null>(null);
+  const [showManualForm, setShowManualForm] = useState(false);
+  const [manualTitle, setManualTitle] = useState('');
+  const [manualSubject, setManualSubject] = useState('');
+  const [manualCategory, setManualCategory] = useState<ExamCategory>('UTS / PTS');
+  const [manualClasses, setManualClasses] = useState('');
+  const [manualDate, setManualDate] = useState('');
+  const [manualStartTime, setManualStartTime] = useState('07:30');
+  const [manualEndTime, setManualEndTime] = useState('09:00');
+  const [manualDuration, setManualDuration] = useState(90);
+  const [manualSessionName, setManualSessionName] = useState('Sesi 1');
+  const [manualToken, setManualToken] = useState('');
   const [statusNotice, setStatusNotice] = useState<{
     type: 'ok' | 'err';
     text: string;
@@ -91,24 +113,38 @@ export function SessionScheduleManager() {
     });
   };
 
+  const handleDownloadTemplateXlsx = () => {
+    const csv = generateExamScheduleCSVTemplate(db.teachers, db.classes);
+    downloadXlsxFromCsv('template-jadwal-ujian-massal.xlsx', csv, 'Jadwal Ujian');
+    setStatusNotice({
+      type: 'ok',
+      text: 'Template Excel (.xlsx) jadwal ujian berhasil diunduh.',
+    });
+  };
+
   const handleLoadSampleTemplate = () => {
     const csv = generateExamScheduleCSVTemplate(db.teachers, db.classes);
     setBulkCsvText(csv);
     setStatusNotice(null);
   };
 
-  const handleCsvFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCsvFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setBulkCsvText(reader.result);
-        setStatusNotice(null);
-      }
-    };
-    reader.readAsText(file);
     e.target.value = '';
+    if (!file) return;
+    try {
+      const { csvText } = await readTabularImportFile(file);
+      setBulkCsvText(csvText);
+      setStatusNotice({
+        type: 'ok',
+        text: `File "${file.name}" berhasil dibaca. Periksa pratinjau di bawah lalu klik Impor.`,
+      });
+    } catch (err) {
+      setStatusNotice({
+        type: 'err',
+        text: err instanceof Error ? err.message : 'Gagal membaca file jadwal CSV/XLSX.',
+      });
+    }
   };
 
   const handleRunBulkImport = () => {
@@ -133,6 +169,57 @@ export function SessionScheduleManager() {
       text: `Impor jadwal massal berhasil: ${res.added} sesi baru, ${res.updated} sesi diperbarui${
         res.newClassesAdded > 0 ? `, ${res.newClassesAdded} kelas baru` : ''
       }${parsed.errors.length > 0 ? ` (${parsed.errors.length} baris dilewati)` : ''}.`,
+    });
+  };
+
+  const handleSaveManualSchedule = (e: React.FormEvent) => {
+    e.preventDefault();
+    const title = manualTitle.trim();
+    const subject = manualSubject.trim();
+    if (!title || !subject) {
+      setStatusNotice({
+        type: 'err',
+        text: 'Judul sesi ujian dan mata pelajaran wajib diisi.',
+      });
+      return;
+    }
+    const parsedClasses = manualClasses
+      .split(/[,;|]/)
+      .map((c) => c.trim())
+      .filter(Boolean);
+    const cleanedToken =
+      manualToken.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) ||
+      `${subject.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || 'UJN'}${String(
+        Date.now()
+      ).slice(-4)}`;
+
+    upsertExamPackage({
+      teacherId: db.teachers[0]?.id || 'admin',
+      title,
+      subject,
+      category: manualCategory,
+      targetClasses: parsedClasses,
+      durationMinutes: Math.max(10, Number(manualDuration) || 90),
+      minSubmitMinutes: 10,
+      kkm: 75,
+      token: cleanedToken,
+      shuffleQuestions: true,
+      shuffleOptions: true,
+      isPublished: true,
+      scheduledDate: manualDate || undefined,
+      scheduledStartTime: manualStartTime || undefined,
+      scheduledEndTime: manualEndTime || undefined,
+      sessionName: manualSessionName.trim() || undefined,
+    });
+    setManualTitle('');
+    setManualSubject('');
+    setManualClasses('');
+    setManualDate('');
+    setManualToken('');
+    setShowManualForm(false);
+    setStatusNotice({
+      type: 'ok',
+      text: `Jadwal "${title}" berhasil ditambahkan (Token: ${cleanedToken}).`,
     });
   };
 
@@ -485,7 +572,7 @@ export function SessionScheduleManager() {
       {/* SUB-MENU 2: DAFTAR JADWAL & PAKET TERDAFTAR */}
       {subTab === 'registered' && (
         <section className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 sm:p-5 space-y-3">
-          <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
             <div className="min-w-0">
               <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
                 Jadwal Terdaftar ({db.packages.length})
@@ -495,21 +582,141 @@ export function SessionScheduleManager() {
                 {db.packages.length - activePackagesCount}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => setSubTab('bulk_import')}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 whitespace-nowrap shrink-0"
-            >
-              <Upload className="h-3.5 w-3.5" />
-              <span>Tambah CSV</span>
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                data-testid="toggle-manual-schedule-form-btn"
+                onClick={() => setShowManualForm((prev) => !prev)}
+                className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
+              >
+                {showManualForm ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+                <span>{showManualForm ? 'Tutup Form' : 'Tambah Manual'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubTab('bulk_import')}
+                className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 whitespace-nowrap"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                <span>CSV</span>
+              </button>
+            </div>
           </div>
 
+          {showManualForm && (
+            <form
+              onSubmit={handleSaveManualSchedule}
+              data-testid="manual-schedule-form"
+              className="rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50/40 dark:bg-indigo-950/25 p-3 space-y-2.5 text-xs"
+            >
+              <div className="font-semibold text-indigo-900 dark:text-indigo-200">
+                Tambah Jadwal Sesi Ujian Manual
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                <input
+                  type="text"
+                  required
+                  placeholder="Judul Sesi (cth: UTS Matematika)"
+                  value={manualTitle}
+                  onChange={(e) => setManualTitle(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  required
+                  placeholder="Mata Pelajaran"
+                  value={manualSubject}
+                  onChange={(e) => setManualSubject(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                />
+                <select
+                  value={manualCategory}
+                  onChange={(e) => setManualCategory(e.target.value as ExamCategory)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                >
+                  <option value="UTS / PTS">UTS / PTS</option>
+                  <option value="Ulangan Harian">Ulangan Harian</option>
+                  <option value="Latihan Soal">Latihan Soal</option>
+                </select>
+                <input
+                  type="text"
+                  placeholder="Kelas Target (cth: XI IPA 1, XI IPA 2)"
+                  value={manualClasses}
+                  onChange={(e) => setManualClasses(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                />
+                <input
+                  type="date"
+                  value={manualDate}
+                  onChange={(e) => setManualDate(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs font-mono text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                />
+                <div className="grid grid-cols-2 gap-1.5">
+                  <input
+                    type="time"
+                    value={manualStartTime}
+                    onChange={(e) => setManualStartTime(e.target.value)}
+                    aria-label="Jam mulai sesi"
+                    className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs font-mono text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                  />
+                  <input
+                    type="time"
+                    value={manualEndTime}
+                    onChange={(e) => setManualEndTime(e.target.value)}
+                    aria-label="Jam selesai sesi"
+                    className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs font-mono text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <input
+                    type="number"
+                    min={10}
+                    max={300}
+                    value={manualDuration}
+                    onChange={(e) => setManualDuration(Number(e.target.value))}
+                    placeholder="Durasi (m)"
+                    className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs font-mono text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={manualSessionName}
+                    onChange={(e) => setManualSessionName(e.target.value)}
+                    placeholder="Nama Sesi"
+                    className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                  />
+                </div>
+                <input
+                  type="text"
+                  placeholder="Token (opsional, otomatis)"
+                  value={manualToken}
+                  onChange={(e) => setManualToken(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs font-mono uppercase text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowManualForm(false)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  data-testid="save-manual-schedule-btn"
+                  className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+                >
+                  Simpan Jadwal
+                </button>
+              </div>
+            </form>
+          )}
+
           {db.packages.length === 0 ? (
-            <div className="py-8 text-center space-y-2">
+            <div data-testid="empty-schedule-list" className="py-8 text-center space-y-2">
               <CalendarClock className="h-7 w-7 mx-auto text-slate-300 dark:text-slate-600" />
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Belum ada sesi atau paket ujian terdaftar. Gunakan menu Impor Massal CSV untuk menambahkan banyak sesi sekaligus.
+                Daftar jadwal masih kosong. Klik Tambah Manual atau gunakan Impor Massal CSV untuk mengisi sesi ujian.
               </p>
             </div>
           ) : (
@@ -517,73 +724,116 @@ export function SessionScheduleManager() {
               className="grid grid-cols-1 md:grid-cols-2 gap-2.5"
               data-testid="registered-packages-list"
             >
-              {db.packages.map((pkg) => (
-                <div
-                  key={pkg.id}
-                  data-testid={`schedule-pkg-row-${pkg.id}`}
-                  className="flex flex-col justify-between gap-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 p-3 text-xs"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="font-semibold text-slate-900 dark:text-slate-100 leading-snug">
-                        {pkg.title}
-                      </span>
-                      <span
-                        className={`shrink-0 font-semibold text-[11px] ${
-                          pkg.isPublished
-                            ? 'text-emerald-700 dark:text-emerald-400'
-                            : 'text-slate-500 dark:text-slate-400'
-                        }`}
-                      >
-                        {pkg.isPublished ? 'Aktif' : 'Nonaktif'}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                      {pkg.subject} · {pkg.targetClasses.join(', ') || 'Semua Kelas'} · {pkg.durationMinutes}m
-                    </div>
-                    {(pkg.scheduledDate || pkg.scheduledStartTime || pkg.sessionName) && (
-                      <div className="mt-1 text-[11px] font-mono tabular-nums text-indigo-700 dark:text-indigo-400">
-                        {[
-                          pkg.sessionName,
-                          pkg.scheduledDate,
-                          pkg.scheduledStartTime && pkg.scheduledEndTime
-                            ? `${pkg.scheduledStartTime}–${pkg.scheduledEndTime}`
-                            : pkg.scheduledStartTime,
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')}
+              {db.packages.map((pkg) => {
+                const isConfirmingDelete = confirmDeletePkgId === pkg.id;
+                return (
+                  <div
+                    key={pkg.id}
+                    data-testid={`schedule-pkg-row-${pkg.id}`}
+                    className="flex flex-col justify-between gap-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 p-3 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="font-semibold text-slate-900 dark:text-slate-100 leading-snug">
+                          {pkg.title}
+                        </span>
+                        <span
+                          className={`shrink-0 font-semibold text-[11px] ${
+                            pkg.isPublished
+                              ? 'text-emerald-700 dark:text-emerald-400'
+                              : 'text-slate-500 dark:text-slate-400'
+                          }`}
+                        >
+                          {pkg.isPublished ? 'Aktif' : 'Nonaktif'}
+                        </span>
                       </div>
-                    )}
-                  </div>
+                      <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                        {pkg.subject} · {pkg.targetClasses.join(', ') || 'Semua Kelas'} · {pkg.durationMinutes}m
+                      </div>
+                      {(pkg.scheduledDate || pkg.scheduledStartTime || pkg.sessionName) && (
+                        <div className="mt-1 text-[11px] font-mono tabular-nums text-indigo-700 dark:text-indigo-400">
+                          {[
+                            pkg.sessionName,
+                            pkg.scheduledDate,
+                            pkg.scheduledStartTime && pkg.scheduledEndTime
+                              ? `${pkg.scheduledStartTime}–${pkg.scheduledEndTime}`
+                              : pkg.scheduledStartTime,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </div>
+                      )}
+                    </div>
 
-                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/70 dark:border-slate-700/70">
-                    <span className="font-mono font-bold text-indigo-700 dark:text-indigo-400 tracking-wider">
-                      {pkg.token}
-                    </span>
-                    <button
-                      type="button"
-                      data-testid={`toggle-pkg-active-${pkg.id}`}
-                      aria-label={`${pkg.isPublished ? 'Nonaktifkan' : 'Aktifkan'} paket ${pkg.title}`}
-                      onClick={() => {
-                        const nextState = !pkg.isPublished;
-                        togglePackagePublished(pkg.id);
-                        setStatusNotice({
-                          type: 'ok',
-                          text: `Paket "${pkg.title}" berhasil ${nextState ? 'diaktifkan' : 'dinonaktifkan'}.`,
-                        });
-                      }}
-                      className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap ${
-                        pkg.isPublished
-                          ? 'border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/50'
-                          : 'border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50'
-                      }`}
-                    >
-                      <Power className="h-3 w-3" />
-                      <span>{pkg.isPublished ? 'Nonaktifkan' : 'Aktifkan'}</span>
-                    </button>
+                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/70 dark:border-slate-700/70">
+                      <span className="font-mono font-bold text-indigo-700 dark:text-indigo-400 tracking-wider">
+                        {pkg.token}
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          data-testid={`toggle-pkg-active-${pkg.id}`}
+                          aria-label={`${pkg.isPublished ? 'Nonaktifkan' : 'Aktifkan'} paket ${pkg.title}`}
+                          onClick={() => {
+                            const nextState = !pkg.isPublished;
+                            togglePackagePublished(pkg.id);
+                            setStatusNotice({
+                              type: 'ok',
+                              text: `Paket "${pkg.title}" berhasil ${nextState ? 'diaktifkan' : 'dinonaktifkan'}.`,
+                            });
+                          }}
+                          className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                            pkg.isPublished
+                              ? 'border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/50'
+                              : 'border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50'
+                          }`}
+                        >
+                          <Power className="h-3 w-3" />
+                          <span>{pkg.isPublished ? 'Nonaktifkan' : 'Aktifkan'}</span>
+                        </button>
+
+                        {!isConfirmingDelete ? (
+                          <button
+                            type="button"
+                            data-testid={`delete-pkg-${pkg.id}`}
+                            aria-label={`Hapus jadwal ${pkg.title}`}
+                            title="Hapus jadwal"
+                            onClick={() => setConfirmDeletePkgId(pkg.id)}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 dark:hover:border-rose-800 dark:hover:bg-rose-950/50 dark:hover:text-rose-300 transition-colors"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        ) : (
+                          <div className="inline-flex items-center gap-1">
+                            <button
+                              type="button"
+                              data-testid={`confirm-delete-pkg-${pkg.id}`}
+                              onClick={() => {
+                                deleteExamPackage(pkg.id);
+                                setConfirmDeletePkgId(null);
+                                setStatusNotice({
+                                  type: 'ok',
+                                  text: `Jadwal "${pkg.title}" berhasil dihapus.`,
+                                });
+                              }}
+                              className="rounded-md bg-rose-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-rose-700"
+                            >
+                              Hapus
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeletePkgId(null)}
+                              className="rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-1.5 py-1 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                            >
+                              Batal
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
@@ -608,21 +858,30 @@ export function SessionScheduleManager() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
+            <div className="grid grid-cols-3 sm:flex items-center gap-1.5 sm:gap-2 shrink-0">
               <button
                 type="button"
                 data-testid="download-schedule-template-btn"
                 onClick={handleDownloadTemplate}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 sm:px-3 py-2 text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
               >
                 <Download className="h-3.5 w-3.5" />
-                <span>Unduh Template</span>
+                <span>Template .CSV</span>
+              </button>
+              <button
+                type="button"
+                data-testid="download-schedule-template-xlsx-btn"
+                onClick={handleDownloadTemplateXlsx}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-800 px-2.5 sm:px-3 py-2 text-[11px] sm:text-xs font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 whitespace-nowrap"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Template .XLSX</span>
               </button>
               <button
                 type="button"
                 data-testid="load-sample-schedule-btn"
                 onClick={handleLoadSampleTemplate}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 px-3 py-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 whitespace-nowrap"
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 px-2.5 sm:px-3 py-2 text-[11px] sm:text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 whitespace-nowrap"
               >
                 <CalendarClock className="h-3.5 w-3.5" />
                 <span>Muat Contoh</span>
@@ -637,16 +896,16 @@ export function SessionScheduleManager() {
                 htmlFor="bulk-schedule-file"
                 className="text-xs font-semibold text-slate-700 dark:text-slate-300"
               >
-                Unggah File CSV (.csv / .txt) atau Tempel dari Excel / Google Sheets
+                Unggah File Excel / CSV (.xlsx / .xls / .csv / .txt) atau Tempel Langsung
               </label>
-              <label className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer whitespace-nowrap self-start sm:self-auto">
+              <label className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/40 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 cursor-pointer whitespace-nowrap self-start sm:self-auto">
                 <Upload className="h-3.5 w-3.5" />
-                <span>Pilih File CSV</span>
+                <span>Pilih File CSV / XLSX</span>
                 <input
                   id="bulk-schedule-file"
                   data-testid="bulk-schedule-file-input"
                   type="file"
-                  accept=".csv,.txt,text/csv,text/plain"
+                  accept=".csv,.xlsx,.xls,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                   onChange={handleCsvFileUpload}
                   className="sr-only"
                 />

@@ -1,6 +1,11 @@
 import type { CBTDatabase } from '../types/cbt';
+import { DEFAULT_SCHOOL_SNAPSHOT } from './defaultSchoolSnapshot';
 
 export const DEFAULT_SCHOOL_LOGO = '/assets/aistudio/LOGO_SMANSA_3D_d5e941c9.png';
+
+function cloneDefaultData<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
 
 export function createInitialSeedDatabase(): CBTDatabase {
   return {
@@ -42,6 +47,11 @@ export function createInitialSeedDatabase(): CBTDatabase {
       autoReleaseDateTime: '07:30',
       emergencyForceFinishedAt: null,
     },
+    proctorConfig: {
+      enabled: true,
+      allowTeacherAccountsAsProctor: true,
+      teacherAssignments: {},
+    },
     spreadsheetSync: {
       enabled: false,
       webAppUrl: '',
@@ -53,13 +63,15 @@ export function createInitialSeedDatabase(): CBTDatabase {
       lastSyncedAt: null,
       lastSyncDirection: null,
     },
-    classes: [],
-    teachers: [],
-    students: [],
-    packages: [],
-    questions: [],
+    classes: cloneDefaultData(DEFAULT_SCHOOL_SNAPSHOT.classes),
+    teachers: cloneDefaultData(DEFAULT_SCHOOL_SNAPSHOT.teachers),
+    proctors: [],
+    students: cloneDefaultData(DEFAULT_SCHOOL_SNAPSHOT.students),
+    packages: cloneDefaultData(DEFAULT_SCHOOL_SNAPSHOT.packages),
+    questions: cloneDefaultData(DEFAULT_SCHOOL_SNAPSHOT.questions),
     attempts: [],
     violations: [],
+    toiletRequests: [],
     auditLogs: [],
   };
 }

@@ -26,7 +26,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCBT } from '../../context/CBTContext';
-import type { TeacherAccount } from '../../types/cbt';
+import type { ExamPackage, TeacherAccount } from '../../types/cbt';
 import { resolveEffectiveAttemptStatus } from '../../utils/cbtLogic';
 import {
   computeViolationDashboardSummary,
@@ -36,7 +36,9 @@ import {
 import type { DesktopPushPermission } from './TeacherPortal';
 
 interface ViolationNotificationDashboardProps {
-  teacher: TeacherAccount;
+  teacher?: TeacherAccount;
+  allowedPackages?: ExamPackage[];
+  allowedClasses?: string[];
   selectedPackageId: string;
   onSelectPackage: (id: string) => void;
   unreadViolationIds: Set<string>;
@@ -52,6 +54,7 @@ const CORE_CATEGORIES: ViolationCategoryId[] = [
   'face_out_of_frame',
   'multiple_faces',
   'tab_switching',
+  'screenshot_print',
 ];
 
 const CATEGORY_VISUALS: Record<
@@ -124,6 +127,8 @@ const CATEGORY_VISUALS: Record<
 
 export function ViolationNotificationDashboard({
   teacher,
+  allowedPackages,
+  allowedClasses,
   selectedPackageId,
   onSelectPackage,
   unreadViolationIds,
@@ -142,12 +147,28 @@ export function ViolationNotificationDashboard({
   } = useCBT();
 
   const myPackages = useMemo(
-    () => db.packages.filter((p) => p.teacherId === teacher.id),
-    [db.packages, teacher.id]
+    () =>
+      allowedPackages
+        ? allowedPackages
+        : teacher
+          ? db.packages.filter((p) => p.teacherId === teacher.id)
+          : db.packages,
+    [allowedPackages, db.packages, teacher]
   );
   const myPackageIds = useMemo(
     () => myPackages.map((p) => p.id),
     [myPackages]
+  );
+  const normalizedAllowedClasses = useMemo(
+    () => (allowedClasses || []).filter(Boolean),
+    [allowedClasses]
+  );
+  const scopedViolations = useMemo(
+    () =>
+      normalizedAllowedClasses.length === 0
+        ? db.violations
+        : db.violations.filter((v) => normalizedAllowedClasses.includes(v.className)),
+    [db.violations, normalizedAllowedClasses]
   );
 
   const [packageScope, setPackageScope] = useState<string>('ALL');
@@ -169,7 +190,7 @@ export function ViolationNotificationDashboard({
 
   useEffect(() => {
     setNowMs(Date.now());
-  }, [db.violations.length]);
+  }, [scopedViolations.length]);
 
   const effectivePackageScope =
     packageScope !== 'ALL' && myPackageIds.includes(packageScope)
@@ -179,7 +200,7 @@ export function ViolationNotificationDashboard({
   const summary = useMemo(
     () =>
       computeViolationDashboardSummary({
-        violations: db.violations,
+        violations: scopedViolations,
         attempts: db.attempts,
         teacherPackageIds: myPackageIds,
         selectedPackageId: effectivePackageScope,
@@ -189,7 +210,7 @@ export function ViolationNotificationDashboard({
         nowMs,
       }),
     [
-      db.violations,
+      scopedViolations,
       db.attempts,
       myPackageIds,
       effectivePackageScope,

@@ -3,11 +3,16 @@ import type {
   ExamAttempt,
   ExamPackage,
   GlobalSecurityConfig,
+  ProctorAccount,
+  ProctorConfig,
   Question,
+  Role,
   SessionScheduleConfig,
   StudentAnswerValue,
   StudentAttemptStatus,
   StudentRecord,
+  TeacherAccount,
+  ToiletPermissionRequest,
 } from '../types/cbt';
 
 export const MIN_ESSAY_QUESTIONS = 5;
@@ -60,7 +65,7 @@ const INDONESIAN_SYNONYM_GROUPS: string[][] = [
   ['sebab', 'akibat', 'picu', 'timbul', 'dampak', 'pengaruh', 'faktor', 'alasan', 'konsekuensi', 'efek'],
   ['proses', 'tahap', 'mekanisme', 'cara', 'langkah', 'urutan', 'siklus', 'jalur', 'alur'],
   ['energi', 'tenaga', 'daya', 'kekuatan', 'kalori', 'atp'],
-  ['cahaya', 'sinar', 'matahari', 'surya', 'foton', 'terang'],
+  ['cahaya', 'sinar', 'matahari', 'mentari', 'surya', 'foton', 'terang'],
   ['oksigen', 'o2', 'udara'],
   ['karbondioksida', 'co2', 'karbon'],
   ['air', 'h2o', 'cairan', 'mineral'],
@@ -109,6 +114,22 @@ const INDONESIAN_SYNONYM_GROUPS: string[][] = [
   ['magnet', 'medan', 'kutub', 'induksi'],
   ['sosial', 'budaya', 'kultur', 'adat', 'tradisi', 'kebiasaan'],
   ['sejarah', 'lampau', 'peristiwa', 'kronologi', 'zaman'],
+  ['lambat', 'pelan', 'perlahan', 'berkurang', 'melambat'],
+  ['dingin', 'sejuk', 'beku', 'rendahsuhu'],
+  ['serap', 'absorpsi', 'ambil', 'terima', 'hisap', 'menyerap'],
+  ['lepas', 'keluar', 'buang', 'emisi', 'ekskresi', 'melepaskan'],
+  ['ekosistem', 'lingkungan', 'habitat', 'alam', 'bioma'],
+  ['sel', 'jaringan', 'membran', 'sitoplasma', 'protoplasma'],
+  ['pembelahan', 'mitosis', 'meiosis', 'reproduksi', 'membelah'],
+  ['konstitusi', 'uud', 'undangundangdasar', 'dasarnegara'],
+  ['hak', 'wewenang', 'kebebasan', 'privilige'],
+  ['kewajiban', 'tanggungjawab', 'tugaswajib', 'keharusan'],
+  ['permintaan', 'demand', 'pembelian', 'kebutuhan'],
+  ['penawaran', 'supply', 'penyediaan', 'penjualan'],
+  ['pajak', 'retribusi', 'iuran', 'pungutan'],
+  ['globalisasi', 'mendunia', 'internasional', 'lintasnegara'],
+  ['gempa', 'seismik', 'tektonik', 'vulkanik', 'getaran'],
+  ['atmosfer', 'lapisanudara', 'ozon', 'troposfer', 'stratosfer'],
 ];
 
 const SYNONYM_TO_CANONICAL = new Map<string, string>();
@@ -117,6 +138,33 @@ for (const group of INDONESIAN_SYNONYM_GROUPS) {
   for (const word of group) {
     SYNONYM_TO_CANONICAL.set(word, canonical);
   }
+}
+
+const NEGATION_WORDS = new Set([
+  'tidak', 'tak', 'bukan', 'bukanlah', 'belum', 'tanpa', 'tiada', 'jangan', 'gagal', 'dilarang', 'anti', 'non',
+]);
+
+const ANTONYM_PAIRS: Array<[string, string]> = [
+  ['naik', 'turun'],
+  ['positif', 'buruk'],
+  ['dukung', 'hambat'],
+  ['sama', 'beda'],
+  ['cepat', 'lambat'],
+  ['panas', 'dingin'],
+  ['serap', 'lepas'],
+  ['asam', 'basa'],
+  ['benar', 'salah'],
+  ['untung', 'rugi'],
+  ['hidup', 'mati'],
+  ['permintaan', 'penawaran'],
+];
+
+const ANTONYM_MAP = new Map<string, Set<string>>();
+for (const [a, b] of ANTONYM_PAIRS) {
+  if (!ANTONYM_MAP.has(a)) ANTONYM_MAP.set(a, new Set());
+  if (!ANTONYM_MAP.has(b)) ANTONYM_MAP.set(b, new Set());
+  ANTONYM_MAP.get(a)!.add(b);
+  ANTONYM_MAP.get(b)!.add(a);
 }
 
 function stemIndonesianToken(raw: string): string {
@@ -202,16 +250,81 @@ function levenshteinSimilarity(a: string, b: string): number {
   return 1 - prev[b.length] / maxLen;
 }
 
+function extractNumericAndFormulaTokens(text: string): string[] {
+  const lower = text
+    .toLowerCase()
+    .replace(/,/g, '.')
+    .replace(/karbon\s+dioksida/g, 'co2')
+    .replace(/\boksigen\b/g, 'o2');
+  const matches = lower.match(/\b\d+(?:\.\d+)?%?\b|\b(?:h2o|co2|o2|n2|nacl|hcl|h2so4|nh3|ch4|atp|dna|rna)\b/g);
+  return matches ? [...new Set(matches)] : [];
+}
+
+function extractNegatedConcepts(text: string): Set<string> {
+  const normalized = normalizeEssayText(text);
+  const words = normalized.split(' ').filter(Boolean);
+  const negated = new Set<string>();
+  for (let i = 0; i < words.length; i++) {
+    if (NEGATION_WORDS.has(words[i])) {
+      for (let j = i + 1; j <= Math.min(words.length - 1, i + 3); j++) {
+        const w = words[j];
+        if (!INDONESIAN_STOPWORDS.has(w) && !NEGATION_WORDS.has(w) && w.length >= 2) {
+          negated.add(canonicalizeToken(w));
+        }
+      }
+    }
+  }
+  return negated;
+}
+
+function detectSemanticContradiction(
+  studentAnswer: string,
+  answerKey: string,
+  stuConcepts: string[],
+  keyConcepts: string[]
+): boolean {
+  const stuNegated = extractNegatedConcepts(studentAnswer);
+  const keyNegated = extractNegatedConcepts(answerKey);
+  const stuSet = new Set(stuConcepts);
+  const keySet = new Set(keyConcepts);
+
+  // 1. Direct polarity flip on a shared concept (e.g. key: "meningkat", student: "tidak meningkat")
+  for (const kc of keyConcepts) {
+    if (kc === 'tidak') continue;
+    if (stuNegated.has(kc) && !keyNegated.has(kc)) {
+      return true;
+    }
+    if (keyNegated.has(kc) && stuSet.has(kc) && !stuNegated.has(kc)) {
+      return true;
+    }
+  }
+
+  // 2. Direct antonym substitution (e.g. key requires "naik" without "turun", student introduces unnegated "turun")
+  let antonymConflicts = 0;
+  for (const kc of keyConcepts) {
+    const antonyms = ANTONYM_MAP.get(kc);
+    if (!antonyms) continue;
+    for (const ant of antonyms) {
+      if (stuSet.has(ant) && !keySet.has(ant) && !stuNegated.has(ant)) {
+        antonymConflicts += 1;
+      }
+    }
+  }
+  return antonymConflicts > 0;
+}
+
 /**
- * Deterministic Indonesian semantic essay evaluator.
- * Awards proportional points (0..maxPoints) based on conceptual & synonym equivalence
- * even when student uses different diction or sentence structure with the same meaning.
+ * High-precision deterministic Indonesian semantic essay evaluator.
+ * Awards proportional points (0..maxPoints) based on conceptual, clause, numeric/formula,
+ * and synonym equivalence while guarding against negation flips, antonym contradictions,
+ * repetition spam, and prompt-copying.
  */
 export function evaluateEssayAnswerSemantic(
   studentAnswer: string,
   answerKey: string,
   keywords: string[] = [],
-  maxPoints = 10
+  maxPoints = 10,
+  questionPrompt = ''
 ): EssayGradeResult & { isCorrect: boolean } {
   const safeMax = maxPoints > 0 ? maxPoints : 10;
   const cleanStudent = (studentAnswer || '').trim();
@@ -259,54 +372,115 @@ export function evaluateEssayAnswerSemantic(
     };
   }
 
-  // Build unique concept set for key & student
-  const keyConcepts = [...new Set(keyTok.concepts)];
-  const stuConcepts = [...new Set(stuTok.concepts)];
+  const keyConcepts = [...new Set(keyTok.concepts)].filter((c) => c !== 'tidak');
+  const stuConcepts = [...new Set(stuTok.concepts)].filter((c) => c !== 'tidak');
 
-  // 1. Concept recall with synonym & fuzzy tolerance (handles paraphrased diction + minor typos)
+  // Guard 0: Prompt-copy detection (student merely copies the question wording without key concepts)
+  if (questionPrompt.trim().length > 12) {
+    const normPrompt = normalizeEssayText(questionPrompt);
+    const promptTok = extractSemanticTokens(questionPrompt);
+    const promptRawSet = new Set(promptTok.rawTokens);
+    const promptConcepts = new Set(promptTok.concepts);
+    const keyOnlyConcepts = keyConcepts.filter((kc) => !promptConcepts.has(kc));
+
+    const rawCopyRatio =
+      stuTok.rawTokens.length > 0
+        ? stuTok.rawTokens.filter((t) => promptRawSet.has(t)).length /
+          stuTok.rawTokens.length
+        : 0;
+    const stuFromPrompt = stuConcepts.filter((sc) => promptConcepts.has(sc)).length;
+    const stuFromKeyOnly = stuConcepts.filter(
+      (sc) =>
+        !promptConcepts.has(sc) &&
+        (keyOnlyConcepts.includes(sc) ||
+          keyOnlyConcepts.some((kc) => levenshteinSimilarity(kc, sc) >= 0.85))
+    ).length;
+
+    if (
+      normStudent === normPrompt ||
+      (stuTok.rawTokens.length >= 4 && rawCopyRatio >= 0.82 && stuFromKeyOnly === 0) ||
+      (keyOnlyConcepts.length >= 2 &&
+        stuConcepts.length >= 3 &&
+        stuFromPrompt / stuConcepts.length >= 0.78 &&
+        stuFromKeyOnly === 0)
+    ) {
+      return {
+        isCorrect: false,
+        scoreRatio: 0.08,
+        earnedPoints: Number((0.08 * safeMax).toFixed(2)),
+        maxPoints: safeMax,
+        matchPercent: 8,
+        feedback: 'Jawaban hanya mengulang redaksi soal tanpa memuat konsep inti jawaban.',
+        gradedBy: 'semantic_local',
+      };
+    }
+  }
+
+  // Guard 1: Repetition / gibberish spam check
+  const uniqueRawRatio =
+    stuTok.rawTokens.length > 0
+      ? new Set(stuTok.rawTokens).size / stuTok.rawTokens.length
+      : 0;
+  const isRepetitiveSpam = stuTok.rawTokens.length >= 6 && uniqueRawRatio < 0.36;
+
+  // Helper to score how well a concept is matched in stuConcepts
+  const matchConceptInStudent = (kc: string): number => {
+    if (stuConcepts.includes(kc)) return 1;
+    let bestFuzzy = 0;
+    for (const sc of stuConcepts) {
+      if (sc.length >= 4 && kc.length >= 4 && (sc.includes(kc) || kc.includes(sc))) {
+        bestFuzzy = Math.max(bestFuzzy, 0.92);
+      } else {
+        const sim = levenshteinSimilarity(kc, sc);
+        if (sim >= 0.78) bestFuzzy = Math.max(bestFuzzy, sim);
+      }
+    }
+    return bestFuzzy;
+  };
+
+  // 1. Concept recall with synonym & fuzzy tolerance
   let matchedConceptScore = 0;
   for (const kc of keyConcepts) {
-    if (stuConcepts.includes(kc)) {
-      matchedConceptScore += 1;
-    } else {
-      let bestFuzzy = 0;
-      for (const sc of stuConcepts) {
-        if (sc.length >= 4 && kc.length >= 4 && (sc.includes(kc) || kc.includes(sc))) {
-          bestFuzzy = Math.max(bestFuzzy, 0.92);
-        } else {
-          const sim = levenshteinSimilarity(kc, sc);
-          if (sim >= 0.78) bestFuzzy = Math.max(bestFuzzy, sim);
-        }
-      }
-      matchedConceptScore += bestFuzzy;
-    }
+    matchedConceptScore += matchConceptInStudent(kc);
   }
   const conceptRecall =
     keyConcepts.length > 0 ? Math.min(1, matchedConceptScore / keyConcepts.length) : 0;
 
-  // 2. Explicit teacher keywords recall (phrases or individual key terms)
+  // 2. Clause / multi-point proposition coverage
+  const keyClauses = cleanKey
+    .split(/[.;,\n]+|\b(?:serta|sedangkan|kemudian|selain itu)\b/i)
+    .map((part) => [...new Set(extractSemanticTokens(part).concepts)].filter((c) => c !== 'tidak'))
+    .filter((concepts) => concepts.length >= 2);
+
+  let clauseCoverage = conceptRecall;
+  if (keyClauses.length >= 2) {
+    let covered = 0;
+    for (const clause of keyClauses) {
+      const hit = clause.reduce((sum, kc) => sum + matchConceptInStudent(kc), 0) / clause.length;
+      covered += Math.min(1, hit);
+    }
+    clauseCoverage = Math.min(1, covered / keyClauses.length);
+  }
+
+  // 3. Explicit teacher keywords recall
   const cleanKeywords = (keywords || []).map((k) => k.trim()).filter(Boolean);
   let keywordRecall = conceptRecall;
   if (cleanKeywords.length > 0) {
     let kwMatched = 0;
     for (const kw of cleanKeywords) {
       const kwExtracted = extractSemanticTokens(kw);
-      if (kwExtracted.concepts.length === 0) continue;
+      const kwConcepts = kwExtracted.concepts.filter((c) => c !== 'tidak');
+      if (kwConcepts.length === 0) continue;
       let hitParts = 0;
-      for (const kc of kwExtracted.concepts) {
-        if (
-          stuConcepts.includes(kc) ||
-          stuConcepts.some((sc) => levenshteinSimilarity(kc, sc) >= 0.8)
-        ) {
-          hitParts += 1;
-        }
+      for (const kc of kwConcepts) {
+        hitParts += matchConceptInStudent(kc);
       }
-      kwMatched += hitParts / kwExtracted.concepts.length;
+      kwMatched += Math.min(1, hitParts / kwConcepts.length);
     }
     keywordRecall = Math.min(1, kwMatched / cleanKeywords.length);
   }
 
-  // 3. Precision / relevance guard (prevents keyword stuffing or copying unrelated paragraphs)
+  // 4. Precision / relevance guard
   let stuRelevant = 0;
   const referenceConcepts = new Set([
     ...keyConcepts,
@@ -326,22 +500,64 @@ export function evaluateEssayAnswerSemantic(
       ? (2 * conceptRecall * precision) / (conceptRecall + precision)
       : 0;
 
-  // Weighted semantic score: prioritizes conveying all required meanings even with extra explanatory words
+  // 5. Numeric, date & chemical formula accuracy check
+  const keyNumeric = extractNumericAndFormulaTokens(cleanKey);
+  const stuNumeric = extractNumericAndFormulaTokens(cleanStudent);
+  let numericPenalty = 0;
+  let numericMismatch = false;
+  if (keyNumeric.length > 0) {
+    const matchedNum = keyNumeric.filter((tok) => stuNumeric.includes(tok)).length;
+    const numRecall = matchedNum / keyNumeric.length;
+    if (numRecall < 1) {
+      numericPenalty = (1 - numRecall) * 0.25;
+      if (stuNumeric.length > 0 && matchedNum === 0) {
+        numericMismatch = true;
+        numericPenalty = 0.42;
+      }
+    }
+  }
+
+  // 6. Negation & Antonym Contradiction check
+  const hasContradiction = detectSemanticContradiction(
+    cleanStudent,
+    cleanKey,
+    stuConcepts,
+    keyConcepts
+  );
+
+  // Weighted semantic score combining concept recall, clause coverage, keyword recall, and F1
   let rawRatio =
     cleanKeywords.length > 0
-      ? conceptRecall * 0.45 + keywordRecall * 0.4 + f1Score * 0.15
-      : conceptRecall * 0.75 + f1Score * 0.25;
+      ? conceptRecall * 0.35 + clauseCoverage * 0.15 + keywordRecall * 0.38 + f1Score * 0.12
+      : conceptRecall * 0.58 + clauseCoverage * 0.22 + f1Score * 0.2;
 
-  // Boost genuinely complete paraphrased answers (high concept/keyword recall >= 0.82 -> full or near-full score)
-  if (conceptRecall >= 0.85 && (cleanKeywords.length === 0 || keywordRecall >= 0.8)) {
-    rawRatio = Math.min(1, Math.max(rawRatio, 0.95));
-  } else if (conceptRecall >= 0.72 && (cleanKeywords.length === 0 || keywordRecall >= 0.7)) {
-    rawRatio = Math.min(1, Math.max(rawRatio, 0.82));
+  // Boost genuinely complete paraphrased answers when no contradiction/numeric error exists
+  if (!hasContradiction && !numericMismatch) {
+    if (conceptRecall >= 0.85 && (cleanKeywords.length === 0 || keywordRecall >= 0.8)) {
+      rawRatio = Math.min(1, Math.max(rawRatio, 0.96));
+    } else if (conceptRecall >= 0.72 && (cleanKeywords.length === 0 || keywordRecall >= 0.7)) {
+      rawRatio = Math.min(1, Math.max(rawRatio, 0.84));
+    }
+  }
+
+  // Apply numeric/formula accuracy penalty
+  if (numericPenalty > 0) {
+    rawRatio = Math.max(0, rawRatio - numericPenalty);
+  }
+
+  // Apply severe penalty if student reversed meaning (negation / antonym contradiction)
+  if (hasContradiction) {
+    rawRatio = Math.min(rawRatio * 0.25, 0.18);
+  }
+
+  // Apply repetition spam penalty
+  if (isRepetitiveSpam) {
+    rawRatio = Math.min(rawRatio * 0.4, 0.25);
   }
 
   // Guard against ultra-short 1-word guess when answer key requires multi-concept explanation
   if (keyConcepts.length >= 4 && stuTok.rawTokens.length <= 1) {
-    rawRatio = Math.min(rawRatio, 0.25);
+    rawRatio = Math.min(rawRatio, 0.22);
   }
 
   const scoreRatio = Math.max(0, Math.min(1, Number(rawRatio.toFixed(4))));
@@ -350,7 +566,13 @@ export function evaluateEssayAnswerSemantic(
   const isCorrect = scoreRatio >= 0.65;
 
   let feedback = 'Jawaban belum sesuai dengan konsep utama pada kunci jawaban.';
-  if (matchPercent >= 88) {
+  if (hasContradiction) {
+    feedback = 'Terdeteksi makna yang bertentangan atau terbalik dengan konsep pada kunci jawaban.';
+  } else if (isRepetitiveSpam) {
+    feedback = 'Jawaban terlalu berulang dan belum menjelaskan konsep inti secara runtut.';
+  } else if (numericMismatch) {
+    feedback = 'Sebagian kalimat berkaitan, namun angka/rumus/data penting belum sesuai kunci jawaban.';
+  } else if (matchPercent >= 88) {
     feedback = 'Sangat tepat — makna dan konsep jawaban sesuai penuh dengan kunci.';
   } else if (matchPercent >= 65) {
     feedback = 'Baik — inti makna sesuai dengan kunci meskipun menggunakan diksi berbeda.';
@@ -533,7 +755,8 @@ export function evaluateQuestionCorrectness(
         text,
         question.essayAnswerKey || question.explanation || '',
         question.essayKeywords || [],
-        maxPoints
+        maxPoints,
+        question.prompt || ''
       );
       return {
         isCorrect: semantic.isCorrect,
@@ -1638,6 +1861,16 @@ export interface CameraBehaviorInput {
   consecutiveMissingFaceFrames?: number;
   /** Consecutive frames where student is looking sharply down/up */
   consecutiveVerticalFrames?: number;
+  /** Optional ratio of current detected face area/skin mass vs calibrated frontal baseline (0..2, defaults to 1) */
+  faceAreaRatio?: number;
+  /** Optional flag when camera lens is covered, pitch dark, or frozen uniform frame */
+  cameraOccluded?: boolean;
+  /** Optional flag when face centroid or box has moved to the extreme edge of camera view */
+  faceOutOfBounds?: boolean;
+  /** Optional flag indicating camera baseline calibration is still in progress */
+  isCalibrating?: boolean;
+  /** Optional flag indicating initial camera warmup grace period is active */
+  inWarmupGrace?: boolean;
 }
 
 export interface CameraBehaviorEvaluation {
@@ -1652,45 +1885,63 @@ export interface CameraBehaviorEvaluation {
 }
 
 /**
- * Pure multi-signal evaluator for webcam face presence, deliberate sideways head-turns
- * (menolehkan wajah ke kanan/kiri), multiple faces, and microphone talking detection.
+ * Pure multi-signal evaluator for webcam out-of-frame presence, talking audio detection,
+ * camera occlusion, and multiple faces.
  *
- * Calibrated for phones, tablets, and laptops where the camera sits above the screen:
- * looking down toward the screen or subtle eye glances while the face remains visible
- * are NOT treated as violations.
+ * Calibrated strictly so normal in-frame head movements, slight turns, glances, blinks,
+ * posture shifts, or looking down toward the screen are NEVER treated as violations.
+ * Violations trigger ONLY when:
+ * 1. Face exits camera range accompanied by talking audio (keluar jangkauan kamera & suara mengobrol),
+ * 2. Face stays completely outside camera range / lens occluded for sustained frames,
+ * 3. Sustained talking / conversation audio is detected, or
+ * 4. Multiple faces (>1 person) remain in frame.
  */
 export function evaluateCameraBehavior(
   input: CameraBehaviorInput
 ): CameraBehaviorEvaluation {
+  // Never flag violations during startup camera warmup or initial baseline calibration
+  if (input.inWarmupGrace || input.isCalibrating) {
+    return {
+      status: 'focused',
+      nextTurnFrames: 0,
+      nextSpeechFrames: 0,
+      nextMissingFaceFrames: 0,
+      nextVerticalFrames: 0,
+      shouldFlagViolation: false,
+    };
+  }
+
   const faceDetected = input.faceDetected ?? true;
   const faceCount = input.faceCount ?? (faceDetected ? 1 : 0);
-  const eyeYawScore = input.eyeYawScore ?? 0;
+  const faceAreaRatio = input.faceAreaRatio ?? 1;
+  const cameraOccluded = input.cameraOccluded ?? false;
+  const faceOutOfBounds = input.faceOutOfBounds ?? false;
 
   const isMultipleFaces = faceCount > 1;
-  const isMissingFace = !faceDetected || faceCount === 0;
+  // Strictly detect face leaving camera range (not detected, occluded lens, exited outer frame edge,
+  // or face mass collapsed below 12% of calibrated frontal size).
+  const isMissingFace =
+    cameraOccluded ||
+    !faceDetected ||
+    faceCount === 0 ||
+    faceOutOfBounds ||
+    faceAreaRatio < 0.12;
 
-  // Require an unmistakable head/face turn to the left or right (looking at a neighbor),
-  // rather than subtle eye glances, typing hand movement, or slight posture shifts.
-  const absHorizontal = Math.abs(input.horizontalShift);
-  const absYaw = Math.abs(eyeYawScore);
-  const isTurningHeadSideways =
-    faceDetected &&
-    faceCount === 1 &&
-    (absHorizontal >= 0.32 ||
-      absYaw >= 0.44 ||
-      (absYaw >= 0.34 && (absHorizontal >= 0.16 || input.lateralMotionScore >= 0.22)) ||
-      (input.lateralMotionScore >= 0.36 && (absHorizontal >= 0.18 || absYaw >= 0.28)));
+  // Detect sustained conversation/talking audio above room ambient noise floor
+  const isTalking = input.audioRms >= 0.11;
 
-  const isTalking = input.audioRms >= 0.09;
+  // Normal head movements, turns, glances, or posture shifts while face stays visible in frame
+  // are NEVER flagged as violations.
+  const nextTurnFrames = 0;
+  const nextVerticalFrames = 0;
 
   const nextMissingFaceFrames =
-    isMissingFace || isMultipleFaces ? (input.consecutiveMissingFaceFrames ?? 0) + 1 : 0;
-  const nextTurnFrames = isTurningHeadSideways ? input.consecutiveTurnFrames + 1 : 0;
-  // Looking down toward a laptop/tablet/phone screen beneath a top camera is normal — never flag.
-  const nextVerticalFrames = 0;
+    isMissingFace || isMultipleFaces
+      ? (input.consecutiveMissingFaceFrames ?? 0) + 1
+      : 0;
   const nextSpeechFrames = isTalking ? input.consecutiveSpeechFrames + 1 : 0;
 
-  if (isMultipleFaces && nextMissingFaceFrames >= 2) {
+  if (isMultipleFaces && nextMissingFaceFrames >= 4) {
     return {
       status: 'multiple_faces',
       nextTurnFrames: 0,
@@ -1704,7 +1955,8 @@ export function evaluateCameraBehavior(
     };
   }
 
-  if (isMissingFace && nextMissingFaceFrames >= 3) {
+  // Combined high-confidence signal: student moves out of camera range AND talking audio is detected
+  if (isMissingFace && isTalking && (nextMissingFaceFrames >= 3 || nextSpeechFrames >= 3)) {
     return {
       status: 'no_face',
       nextTurnFrames: 0,
@@ -1712,13 +1964,30 @@ export function evaluateCameraBehavior(
       nextMissingFaceFrames: 0,
       nextVerticalFrames: 0,
       shouldFlagViolation: true,
-      violationType: 'Deteksi Kamera: Wajah Tidak Terdeteksi',
+      violationType: 'Deteksi Kamera & Audio: Keluar Jangkauan Kamera & Suara Mengobrol',
       violationDetail:
-        'Wajah peserta tidak terlihat di kamera pengawas atau kamera tertutup/menjauh.',
+        'Wajah peserta keluar dari jangkauan kamera disertai suara percakapan/mengobrol.',
     };
   }
 
-  if (nextSpeechFrames >= 3) {
+  // Sustained out-of-frame / occluded camera (~3.0 seconds = 6 frames @ 500ms)
+  if (isMissingFace && nextMissingFaceFrames >= 6) {
+    return {
+      status: 'no_face',
+      nextTurnFrames: 0,
+      nextSpeechFrames: 0,
+      nextMissingFaceFrames: 0,
+      nextVerticalFrames: 0,
+      shouldFlagViolation: true,
+      violationType: 'Deteksi Kamera: Wajah Keluar Jangkauan Kamera',
+      violationDetail: cameraOccluded
+        ? 'Kamera pengawas tampak tertutup atau terlalu gelap sehingga wajah peserta tidak terlihat.'
+        : 'Wajah peserta keluar dari jangkauan kamera pengawas.',
+    };
+  }
+
+  // Sustained talking / conversation audio (~2.5 seconds = 5 frames @ 500ms)
+  if (isTalking && nextSpeechFrames >= 5) {
     return {
       status: 'talking',
       nextTurnFrames: 0,
@@ -1726,24 +1995,9 @@ export function evaluateCameraBehavior(
       nextMissingFaceFrames: 0,
       nextVerticalFrames: 0,
       shouldFlagViolation: true,
-      violationType: 'Deteksi Kamera & Audio: Terindikasi Mengobrol',
+      violationType: 'Deteksi Audio: Suara Mengobrol Terdeteksi',
       violationDetail:
-        'Mikrofon mendeteksi suara percakapan berulang selama ujian berlangsung.',
-    };
-  }
-
-  if (nextTurnFrames >= 3) {
-    const yawDir = absHorizontal >= absYaw ? input.horizontalShift : eyeYawScore;
-    const dir = yawDir < 0 ? 'ke kiri' : 'ke kanan';
-    return {
-      status: 'looking_away',
-      nextTurnFrames: 0,
-      nextSpeechFrames: 0,
-      nextMissingFaceFrames: 0,
-      nextVerticalFrames: 0,
-      shouldFlagViolation: true,
-      violationType: 'Deteksi Kamera: Wajah Menoleh Kanan / Kiri',
-      violationDetail: `Kamera pengawas mendeteksi wajah peserta menoleh jelas ${dir} menjauhi layar ujian.`,
+        'Mikrofon mendeteksi suara percakapan/mengobrol berulang selama ujian berlangsung.',
     };
   }
 
@@ -1754,8 +2008,6 @@ export function evaluateCameraBehavior(
       ? 'no_face'
       : isTalking
       ? 'talking'
-      : isTurningHeadSideways
-      ? 'looking_away'
       : 'focused',
     nextTurnFrames,
     nextSpeechFrames,
@@ -2711,6 +2963,204 @@ export function mergeExamAttempts(
 
   return Array.from(mergedMap.values());
 }
+
+export interface ProctorLoginValidationResult {
+  ok: boolean;
+  error?: string;
+  userId?: string;
+  name?: string;
+  proctorSource?: 'proctor' | 'teacher';
+  assignedPackageIds?: string[];
+  assignedClasses?: string[];
+}
+
+/**
+ * Validates Pengawas (Proctor) login respecting Master Admin settings:
+ * - Rejects if proctorConfig.enabled is false
+ * - Accepts dedicated ProctorAccount entries first
+ * - Accepts TeacherAccount entries when proctorConfig.allowTeacherAccountsAsProctor is true
+ */
+export function validateProctorLogin(params: {
+  username: string;
+  password: string;
+  proctorConfig: ProctorConfig;
+  proctors: ProctorAccount[];
+  teachers: TeacherAccount[];
+}): ProctorLoginValidationResult {
+  const { username, password, proctorConfig, proctors, teachers } = params;
+  if (!proctorConfig.enabled) {
+    return {
+      ok: false,
+      error: 'Mode Pengawas Ujian sedang dinonaktifkan oleh Super Admin pada menu Pengaturan.',
+    };
+  }
+
+  const key = username.trim();
+  const pass = password.trim();
+  if (!key || !pass) {
+    return { ok: false, error: 'Username/NIP dan password pengawas wajib diisi.' };
+  }
+
+  const proctor = proctors.find(
+    (p) =>
+      (p.username.toLowerCase() === key.toLowerCase() ||
+        (p.nip && p.nip.trim() === key)) &&
+      p.password === pass
+  );
+  if (proctor) {
+    if (!proctor.active) {
+      return {
+        ok: false,
+        error: 'Akun pengawas ini sedang dinonaktifkan oleh Super Admin.',
+      };
+    }
+    return {
+      ok: true,
+      userId: proctor.id,
+      name: proctor.name,
+      proctorSource: 'proctor',
+      assignedPackageIds: [...(proctor.assignedPackageIds || [])],
+      assignedClasses: [...(proctor.assignedClasses || [])],
+    };
+  }
+
+  if (proctorConfig.allowTeacherAccountsAsProctor) {
+    const teacher = teachers.find(
+      (t) =>
+        (t.username.toLowerCase() === key.toLowerCase() || t.nip === key) &&
+        t.password === pass
+    );
+    if (teacher) {
+      if (!teacher.active) {
+        return {
+          ok: false,
+          error: 'Akun guru ini sedang dinonaktifkan oleh Super Admin.',
+        };
+      }
+      const customAssign = proctorConfig.teacherAssignments?.[teacher.id];
+      const assignedPackageIds = customAssign?.assignedPackageIds?.length
+        ? [...customAssign.assignedPackageIds]
+        : [];
+      const assignedClasses = customAssign?.assignedClasses?.length
+        ? [...customAssign.assignedClasses]
+        : [...(teacher.classes || [])];
+      return {
+        ok: true,
+        userId: teacher.id,
+        name: teacher.name,
+        proctorSource: 'teacher',
+        assignedPackageIds,
+        assignedClasses,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    error: proctorConfig.allowTeacherAccountsAsProctor
+      ? 'Username/NIP atau password pengawas/guru tidak cocok.'
+      : 'Username atau password akun pengawas tidak cocok (login akun guru sebagai pengawas sedang dinonaktifkan).',
+  };
+}
+
+/**
+ * Resolves the exam packages supervised by a Proctor based on assignedPackageIds and assignedClasses.
+ */
+export function getProctorScopedPackages(
+  packages: ExamPackage[],
+  assignedPackageIds: string[] = [],
+  assignedClasses: string[] = []
+): ExamPackage[] {
+  const pkgSet = new Set(assignedPackageIds.filter(Boolean));
+  const clsSet = new Set(assignedClasses.filter(Boolean));
+
+  return packages.filter((pkg) => {
+    const matchesPkg = pkgSet.size === 0 || pkgSet.has(pkg.id);
+    const matchesClass =
+      clsSet.size === 0 ||
+      pkg.targetClasses.length === 0 ||
+      pkg.targetClasses.some((c) => clsSet.has(c));
+    return matchesPkg && matchesClass;
+  });
+}
+
+/**
+ * Returns the effective supervised class list for a specific exam package.
+ */
+export function getProctorEffectiveClassesForPackage(
+  pkg: ExamPackage,
+  assignedClasses: string[] = []
+): string[] {
+  const cleanAssigned = assignedClasses.filter(Boolean);
+  if (cleanAssigned.length === 0) return pkg.targetClasses;
+  if (pkg.targetClasses.length === 0) return cleanAssigned;
+  const assignedSet = new Set(cleanAssigned);
+  const intersected = pkg.targetClasses.filter((c) => assignedSet.has(c));
+  return intersected.length > 0 ? intersected : pkg.targetClasses;
+}
+
+/**
+ * Filters active (pending or confirmed) toilet permission requests for Admin, Teacher, or Proctor dashboards.
+ */
+export function filterActiveToiletRequests(params: {
+  requests: ToiletPermissionRequest[];
+  role: Role;
+  allowedPackageIds?: string[];
+  allowedClasses?: string[];
+}): ToiletPermissionRequest[] {
+  const { requests, role, allowedPackageIds, allowedClasses } = params;
+  const pkgSet = allowedPackageIds ? new Set(allowedPackageIds) : null;
+  const clsSet =
+    allowedClasses && allowedClasses.length > 0 ? new Set(allowedClasses) : null;
+
+  return requests
+    .filter((req) => req.status === 'pending' || req.status === 'confirmed')
+    .filter((req) => {
+      if (role === 'admin') return true;
+      if (pkgSet && !pkgSet.has(req.packageId)) return false;
+      if (clsSet && !clsSet.has(req.className)) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      // Pending requests first, then newest first
+      if (a.status !== b.status) return a.status === 'pending' ? -1 : 1;
+      return (Date.parse(b.requestedAt) || 0) - (Date.parse(a.requestedAt) || 0);
+    });
+}
+
+/**
+ * Parses bulk multi-class input separated by newlines, commas, semicolons, or pipes.
+ * Normalizes whitespace & uppercase, deduplicates within input and against existing classes.
+ */
+export function parseBulkClassNames(
+  rawInput: string,
+  existingClasses: string[]
+): { toAdd: string[]; duplicates: string[] } {
+  const existingSet = new Set(existingClasses.map((c) => c.trim().toUpperCase()));
+  const seenInBatch = new Set<string>();
+  const toAdd: string[] = [];
+  const duplicates: string[] = [];
+
+  const tokens = rawInput
+    .split(/[\r\n,;|]+/)
+    .map((part) => part.replace(/\s+/g, ' ').trim().toUpperCase())
+    .filter(Boolean);
+
+  for (const token of tokens) {
+    if (existingSet.has(token) || seenInBatch.has(token)) {
+      if (!duplicates.includes(token)) {
+        duplicates.push(token);
+      }
+      continue;
+    }
+    seenInBatch.add(token);
+    toAdd.push(token);
+  }
+
+  return { toAdd, duplicates };
+}
+
+
 
 
 

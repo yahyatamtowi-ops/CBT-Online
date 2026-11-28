@@ -16,9 +16,14 @@ import type { StudentRecord, TeacherAccount } from '../../types/cbt';
 import {
   generateStudentsCSVTemplate,
   generateTeachersCSVTemplate,
+  parseBulkClassNames,
   parseStudentsCSV,
   parseTeachersCSV,
 } from '../../utils/cbtLogic';
+import {
+  downloadXlsxFromCsv,
+  readTabularImportFile,
+} from '../../utils/spreadsheetImport';
 
 function downloadTextFile(filename: string, content: string, mime = 'text/csv;charset=utf-8;') {
   const blob = new Blob([content], { type: mime });
@@ -45,7 +50,7 @@ export function UserManagement() {
     bulkSetStudentsActive,
     deleteStudent,
     bulkDeleteStudents,
-    addClassRoom,
+    addClassRoomsBatch,
     deleteClassRoom,
     bulkDeleteClassRooms,
     updateAdminAccount,
@@ -145,15 +150,23 @@ export function UserManagement() {
     setFeedback(null);
   };
 
-  const handleStudentCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleStudentCsvFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') setStudentCsvText(reader.result);
-    };
-    reader.readAsText(file);
     e.target.value = '';
+    if (!file) return;
+    try {
+      const { csvText } = await readTabularImportFile(file);
+      setStudentCsvText(csvText);
+      setFeedback({
+        type: 'ok',
+        text: `File "${file.name}" berhasil dibaca. Klik "Proses Import" untuk menyimpan data siswa.`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: 'err',
+        text: err instanceof Error ? err.message : 'Gagal membaca file import siswa.',
+      });
+    }
   };
 
   const handleRunStudentCsvImport = () => {
@@ -161,7 +174,7 @@ export function UserManagement() {
     if (parsed.students.length === 0) {
       setFeedback({
         type: 'err',
-        text: parsed.errors[0] || 'Tidak ada baris siswa valid ditemukan di CSV.',
+        text: parsed.errors[0] || 'Tidak ada baris siswa valid ditemukan di file CSV/XLSX.',
       });
       return;
     }
@@ -170,7 +183,7 @@ export function UserManagement() {
     setSearch('');
     setFeedback({
       type: 'ok',
-      text: `Import CSV siswa selesai: ${result.added} ditambahkan, ${result.updated} diperbarui${
+      text: `Import siswa selesai: ${result.added} ditambahkan, ${result.updated} diperbarui${
         parsed.errors.length > 0 ? ` (${parsed.errors.length} baris dilewati)` : ''
       }.`,
     });
@@ -178,15 +191,23 @@ export function UserManagement() {
     setShowStudentCsvModal(false);
   };
 
-  const handleTeacherCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleTeacherCsvFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') setTeacherCsvText(reader.result);
-    };
-    reader.readAsText(file);
     e.target.value = '';
+    if (!file) return;
+    try {
+      const { csvText } = await readTabularImportFile(file);
+      setTeacherCsvText(csvText);
+      setFeedback({
+        type: 'ok',
+        text: `File "${file.name}" berhasil dibaca. Klik "Proses Import Guru" untuk menyimpan.`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: 'err',
+        text: err instanceof Error ? err.message : 'Gagal membaca file import guru.',
+      });
+    }
   };
 
   const handleRunTeacherCsvImport = () => {
@@ -194,14 +215,14 @@ export function UserManagement() {
     if (parsed.teachers.length === 0) {
       setFeedback({
         type: 'err',
-        text: parsed.errors[0] || 'Tidak ada baris guru valid ditemukan di CSV.',
+        text: parsed.errors[0] || 'Tidak ada baris guru valid ditemukan di file CSV/XLSX.',
       });
       return;
     }
     const result = importTeachersBatch(parsed.teachers);
     setFeedback({
       type: 'ok',
-      text: `Import CSV guru selesai: ${result.added} ditambahkan, ${result.updated} diperbarui.`,
+      text: `Import guru selesai: ${result.added} ditambahkan, ${result.updated} diperbarui.`,
     });
     setTeacherCsvText('');
     setShowTeacherCsvModal(false);
@@ -252,16 +273,25 @@ export function UserManagement() {
     setFeedback(null);
   };
 
+  const bulkClassPreview = parseBulkClassNames(newClassName, db.classes);
+
   const handleAddClass = (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
-    const res = addClassRoom(newClassName);
-    if (!res.ok) {
+    const res = addClassRoomsBatch(newClassName);
+    if (res.added.length === 0) {
       setFeedback({ type: 'err', text: res.error || 'Gagal menambah kelas.' });
       return;
     }
     setNewClassName('');
-    setFeedback({ type: 'ok', text: 'Kelas baru berhasil ditambahkan.' });
+    setFeedback({
+      type: 'ok',
+      text: `${res.added.length} kelas baru berhasil ditambahkan (${res.added.join(', ')})${
+        res.duplicates.length > 0
+          ? `. ${res.duplicates.length} duplikat dilewati.`
+          : '.'
+      }`,
+    });
   };
 
   const handleSaveAdminAccount = (e: React.FormEvent) => {
@@ -538,21 +568,26 @@ export function UserManagement() {
                 <button
                   type="button"
                   onClick={() => {
-                    downloadTextFile('format-import-siswa.csv', generateStudentsCSVTemplate());
-                    setFeedback({ type: 'ok', text: 'Template format-import-siswa.csv berhasil diunduh.' });
+                    downloadXlsxFromCsv(
+                      'format-import-siswa.xlsx',
+                      generateStudentsCSVTemplate(),
+                      'Data Siswa'
+                    );
+                    setFeedback({ type: 'ok', text: 'Template format-import-siswa.xlsx berhasil diunduh.' });
                   }}
                   className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap"
                 >
                   <Download className="h-3.5 w-3.5 shrink-0" />
-                  <span>Format CSV</span>
+                  <span>Format XLSX</span>
                 </button>
                 <button
                   type="button"
+                  data-testid="open-student-import-btn"
                   onClick={() => setShowStudentCsvModal((v) => !v)}
                   className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 whitespace-nowrap"
                 >
                   <Upload className="h-3.5 w-3.5 shrink-0" />
-                  <span>Import CSV</span>
+                  <span>Import CSV/XLSX</span>
                 </button>
               </div>
             </div>
@@ -637,16 +672,16 @@ export function UserManagement() {
             </div>
           </form>
 
-          {/* Student CSV Bulk Import Panel */}
+          {/* Student CSV / XLSX Bulk Import Panel */}
           {showStudentCsvModal && (
             <div className="rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/40 dark:bg-indigo-950/30 p-5 space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                    Import Massal Data Siswa (CSV)
+                    Import Massal Data Siswa (CSV / XLSX)
                   </h3>
                   <p className="text-xs text-slate-600 dark:text-slate-400">
-                    Format kolom: <code className="font-mono">NISN,Nama,Kelas,Status_Aktif</code> (Aktif / Blokir)
+                    Format kolom: <code className="font-mono">NISN,Nama,Kelas,Status_Aktif</code> (Aktif / Blokir). Mendukung file Excel <code className="font-mono">.xlsx</code> maupun <code className="font-mono">.csv</code>.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -658,14 +693,29 @@ export function UserManagement() {
                     className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50"
                   >
                     <Download className="h-3.5 w-3.5" />
-                    <span>Unduh Template .CSV</span>
+                    <span>Template .CSV</span>
                   </button>
-                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadXlsxFromCsv(
+                        'format-import-siswa.xlsx',
+                        generateStudentsCSVTemplate(),
+                        'Data Siswa'
+                      )
+                    }
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>Template .XLSX</span>
+                  </button>
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50">
                     <Upload className="h-3.5 w-3.5" />
-                    <span>Unggah File .CSV</span>
+                    <span>Unggah CSV / XLSX</span>
                     <input
                       type="file"
-                      accept=".csv,.txt"
+                      data-testid="student-import-file-input"
+                      accept=".csv,.xlsx,.xls,.txt"
                       onChange={handleStudentCsvFileChange}
                       className="hidden"
                     />
@@ -677,7 +727,7 @@ export function UserManagement() {
                 value={studentCsvText}
                 onChange={(e) => setStudentCsvText(e.target.value)}
                 placeholder={'NISN,Nama,Kelas,Status_Aktif\n0081234567,Nama Siswa,X-IPA-1,Aktif'}
-                aria-label="Konten CSV siswa"
+                aria-label="Konten CSV atau XLSX siswa"
                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 p-3 font-mono text-xs text-slate-800 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
               />
               <div className="flex justify-end gap-2">
@@ -690,10 +740,11 @@ export function UserManagement() {
                 </button>
                 <button
                   type="button"
+                  data-testid="run-student-import-btn"
                   onClick={handleRunStudentCsvImport}
                   className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
                 >
-                  Proses Import CSV
+                  Proses Import Siswa
                 </button>
               </div>
             </div>
@@ -954,11 +1005,12 @@ export function UserManagement() {
                 </button>
                 <button
                   type="button"
+                  data-testid="open-teacher-import-btn"
                   onClick={() => setShowTeacherCsvModal((v) => !v)}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 whitespace-nowrap"
                 >
                   <Upload className="h-3.5 w-3.5" />
-                  <span>Import Massal CSV</span>
+                  <span>Import Massal CSV/XLSX</span>
                 </button>
               </div>
             </div>
@@ -1093,16 +1145,16 @@ export function UserManagement() {
             </div>
           </form>
 
-          {/* Teacher CSV Import Panel */}
+          {/* Teacher CSV / XLSX Import Panel */}
           {showTeacherCsvModal && (
             <div className="rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/40 dark:bg-indigo-950/30 p-5 space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                    Import Massal Data Guru (CSV)
+                    Import Massal Data Guru (CSV / XLSX)
                   </h3>
                   <p className="text-xs text-slate-600 dark:text-slate-400">
-                    Format: <code className="font-mono">Username,NIP,Nama,Password,Mapel,Kelas</code> (pisahkan beberapa mapel/kelas dengan titik koma <code className="font-mono">;</code>)
+                    Format: <code className="font-mono">Username,NIP,Nama,Password,Mapel,Kelas</code> (pisahkan beberapa mapel/kelas dengan titik koma <code className="font-mono">;</code>). Mendukung <code className="font-mono">.xlsx</code> dan <code className="font-mono">.csv</code>.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1114,14 +1166,29 @@ export function UserManagement() {
                     className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200"
                   >
                     <Download className="h-3.5 w-3.5" />
-                    <span>Unduh Template .CSV</span>
+                    <span>Template .CSV</span>
                   </button>
-                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadXlsxFromCsv(
+                        'format-import-guru.xlsx',
+                        generateTeachersCSVTemplate(),
+                        'Data Guru'
+                      )
+                    }
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>Template .XLSX</span>
+                  </button>
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300">
                     <Upload className="h-3.5 w-3.5" />
-                    <span>Unggah File .CSV</span>
+                    <span>Unggah CSV / XLSX</span>
                     <input
                       type="file"
-                      accept=".csv,.txt"
+                      data-testid="teacher-import-file-input"
+                      accept=".csv,.xlsx,.xls,.txt"
                       onChange={handleTeacherCsvFileChange}
                       className="hidden"
                     />
@@ -1133,7 +1200,7 @@ export function UserManagement() {
                 value={teacherCsvText}
                 onChange={(e) => setTeacherCsvText(e.target.value)}
                 placeholder="Username,NIP,Nama,Password,Mapel,Kelas"
-                aria-label="Konten CSV guru"
+                aria-label="Konten CSV atau XLSX guru"
                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 p-3 font-mono text-xs text-slate-800 dark:text-slate-100"
               />
               <div className="flex justify-end gap-2">
@@ -1146,6 +1213,7 @@ export function UserManagement() {
                 </button>
                 <button
                   type="button"
+                  data-testid="run-teacher-import-btn"
                   onClick={handleRunTeacherCsvImport}
                   className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
                 >
@@ -1353,30 +1421,63 @@ export function UserManagement() {
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           <form
             onSubmit={handleAddClass}
-            className="lg:col-span-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4 self-start"
+            className="lg:col-span-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-3.5 self-start"
           >
-            <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-              Tambah Kelas Baru
-            </h2>
+            <div>
+              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                Tambah Nama Kelas (Satu atau Banyak Sekaligus)
+              </h2>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                Masukkan satu kelas atau banyak kelas sekaligus dipisahkan dengan baris baru (Enter), koma (<code className="font-mono">,</code>), atau titik koma (<code className="font-mono">;</code>).
+              </p>
+            </div>
             <div>
               <label htmlFor="new-class-input" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                Kode / Nama Kelas
+                Daftar Kode / Nama Kelas
               </label>
-              <input
+              <textarea
                 id="new-class-input"
-                type="text"
+                data-testid="bulk-class-input"
+                rows={4}
                 value={newClassName}
                 onChange={(e) => setNewClassName(e.target.value)}
-                placeholder="Contoh: X-IPA-1 atau XII-IPS-2"
+                placeholder={'Contoh:\nX-IPA-1, X-IPA-2, X-IPA-3\nXI-IPS-1\nXII-IPA-1'}
                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2 text-xs uppercase font-mono focus:border-indigo-600 focus:outline-none"
               />
             </div>
+            {(bulkClassPreview.toAdd.length > 0 || bulkClassPreview.duplicates.length > 0) && (
+              <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-2.5 text-[11px] space-y-1">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-semibold">
+                  <span className="text-emerald-700 dark:text-emerald-400">
+                    Siap ditambahkan: {bulkClassPreview.toAdd.length} kelas
+                  </span>
+                  {bulkClassPreview.duplicates.length > 0 && (
+                    <span className="text-amber-700 dark:text-amber-400">
+                      Duplikat dilewati: {bulkClassPreview.duplicates.length}
+                    </span>
+                  )}
+                </div>
+                {bulkClassPreview.toAdd.length > 0 && (
+                  <p className="font-mono text-slate-600 dark:text-slate-400 truncate">
+                    {bulkClassPreview.toAdd.slice(0, 8).join(', ')}
+                    {bulkClassPreview.toAdd.length > 8
+                      ? ` (+${bulkClassPreview.toAdd.length - 8} lainnya)`
+                      : ''}
+                  </p>
+                )}
+              </div>
+            )}
             <button
               type="submit"
+              data-testid="submit-bulk-classes-btn"
               className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>Tambahkan Kelas</span>
+              <span>
+                {bulkClassPreview.toAdd.length > 1
+                  ? `Tambahkan ${bulkClassPreview.toAdd.length} Kelas`
+                  : 'Tambahkan Kelas'}
+              </span>
             </button>
           </form>
 

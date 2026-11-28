@@ -23,6 +23,113 @@ async function startServer() {
   app.disable('x-powered-by');
   app.use(express.json({ limit: '15mb' }));
 
+  // ---------------------------------------------------------------------------
+  // Real-Time Live Proctoring Event Hub (SSE + Buffered Snapshot)
+  // Propagates student violations, toilet permission requests, exam locks, and
+  // teacher/proctor unlocks & confirmations across devices/browsers in <200ms
+  // without requiring a page refresh.
+  // ---------------------------------------------------------------------------
+  interface LiveHubEvent {
+    eventId: string;
+    senderId: string;
+    sentAt: string;
+    kind: string;
+    violation?: Record<string, unknown> & { id?: string };
+    toiletRequest?: Record<string, unknown> & { id?: string };
+    attempt?: Record<string, unknown> & { id?: string };
+    deletedAttemptId?: string;
+  }
+
+  const sseClients = new Set<express.Response>();
+  const liveViolations = new Map<string, Record<string, unknown>>();
+  const liveToiletRequests = new Map<string, Record<string, unknown>>();
+  const liveAttempts = new Map<string, Record<string, unknown>>();
+  const liveDeletedAttemptIds = new Set<string>();
+
+  const trimMap = (map: Map<string, Record<string, unknown>>, maxSize: number) => {
+    while (map.size > maxSize) {
+      const oldestKey = map.keys().next().value;
+      if (!oldestKey) break;
+      map.delete(oldestKey);
+    }
+  };
+
+  app.get('/api/live-events', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+    res.write(`data: ${JSON.stringify({ type: 'connected', ts: Date.now() })}\n\n`);
+
+    sseClients.add(res);
+
+    const keepalive = setInterval(() => {
+      try {
+        res.write(': keepalive\n\n');
+      } catch {
+        clearInterval(keepalive);
+        sseClients.delete(res);
+      }
+    }, 20_000);
+
+    req.on('close', () => {
+      clearInterval(keepalive);
+      sseClients.delete(res);
+    });
+  });
+
+  app.get('/api/live-events/snapshot', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      snapshot: {
+        violations: Array.from(liveViolations.values()),
+        toiletRequests: Array.from(liveToiletRequests.values()),
+        attempts: Array.from(liveAttempts.values()),
+        deletedAttemptIds: Array.from(liveDeletedAttemptIds),
+      },
+    });
+  });
+
+  app.post('/api/live-events', (req, res) => {
+    const event = req.body as LiveHubEvent | null;
+    if (!event || typeof event !== 'object' || !event.eventId || !event.kind) {
+      res.status(400).json({ ok: false, error: 'Payload live event tidak valid.' });
+      return;
+    }
+
+    if (event.violation && typeof event.violation.id === 'string') {
+      liveViolations.set(event.violation.id, event.violation);
+      trimMap(liveViolations, 150);
+    }
+    if (event.toiletRequest && typeof event.toiletRequest.id === 'string') {
+      liveToiletRequests.set(event.toiletRequest.id, event.toiletRequest);
+      trimMap(liveToiletRequests, 100);
+    }
+    if (event.attempt && typeof event.attempt.id === 'string') {
+      liveDeletedAttemptIds.delete(event.attempt.id);
+      liveAttempts.set(event.attempt.id, event.attempt);
+      trimMap(liveAttempts, 200);
+    }
+    if (typeof event.deletedAttemptId === 'string' && event.deletedAttemptId) {
+      liveAttempts.delete(event.deletedAttemptId);
+      liveDeletedAttemptIds.add(event.deletedAttemptId);
+    }
+
+    const frame = `data: ${JSON.stringify({ type: 'live_event', event })}\n\n`;
+    for (const client of sseClients) {
+      try {
+        client.write(frame);
+      } catch {
+        sseClients.delete(client);
+      }
+    }
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, delivered: sseClients.size });
+  });
+
   // Reports whether server/Netlify environment variables are pre-configured for zero-touch sync.
   // Never exposes secret values.
   app.get('/api/auto-sync-status', (_req, res) => {

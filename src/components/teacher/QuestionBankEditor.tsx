@@ -35,6 +35,10 @@ import {
   CollectiveQuestionEditor,
   WeightSettingsPanel,
 } from './CollectiveQuestionTools';
+import {
+  downloadXlsxFromCsv,
+  readTabularImportFile,
+} from '../../utils/spreadsheetImport';
 
 const MATH_SYMBOLS = [
   '²', '³', '⁻¹', '√', 'π', 'θ', 'Δ', 'α', 'β', 'μ', 'Ω', '°', '±', '×', '÷', '≤', '≥', '≠', '→', '∑',
@@ -368,6 +372,18 @@ export function QuestionBankEditor({
     });
   };
 
+  const handleDownloadQuestionTemplateXlsx = () => {
+    downloadXlsxFromCsv(
+      'format-import-soal.xlsx',
+      generateQuestionsCSVTemplate(),
+      'Bank Soal'
+    );
+    setFeedback({
+      type: 'ok',
+      text: 'Format template import soal (.xlsx) berhasil diunduh.',
+    });
+  };
+
   const handleBulkImportSubmit = () => {
     if (!currentPkg) return;
     if (!bulkText.trim()) {
@@ -413,15 +429,23 @@ export function QuestionBankEditor({
     });
   };
 
-  const handleBulkFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBulkFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') setBulkText(reader.result);
-    };
-    reader.readAsText(file);
+    try {
+      const { csvText } = await readTabularImportFile(file);
+      setBulkText(csvText);
+      setFeedback({
+        type: 'ok',
+        text: `File "${file.name}" berhasil dibaca. Klik "Impor ke Bank Soal" untuk memproses.`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: 'err',
+        text: err instanceof Error ? err.message : 'Gagal membaca file soal CSV/XLSX.',
+      });
+    }
   };
 
   const handleExportQuestions = () => {
@@ -721,11 +745,11 @@ export function QuestionBankEditor({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Import Soal Massal (Teks / CSV)
+                Import Soal Massal (Teks / CSV / XLSX)
               </h2>
               <p className="text-xs text-slate-600 dark:text-slate-400">
-                Opsi A–D maupun A–E terdeteksi otomatis sesuai input. Format tabel (<code className="font-mono">|</code>, <code className="font-mono">;</code>, <code className="font-mono">,</code>, atau Tab):{' '}
-                <code className="font-mono">PG | Pertanyaan | A | B | C | D | E | Kunci | Pembahasan</code> (kosongkan E jika hanya A–D) ·{' '}
+                Mendukung unggah file Excel <code className="font-mono">.xlsx</code> maupun <code className="font-mono">.csv</code>. Opsi A–D maupun A–E terdeteksi otomatis:{' '}
+                <code className="font-mono">PG | Pertanyaan | A | B | C | D | E | Kunci | Pembahasan</code> ·{' '}
                 <code className="font-mono">PGK | ... | A,E | ...</code> · <code className="font-mono">BS | Pernyataan | Benar/Salah | Pembahasan</code> ·{' '}
                 <code className="font-mono">ESAI | Pertanyaan | Kunci Jawaban Acuan | Kata Kunci (pisah ;) | Pembahasan</code>.
               </p>
@@ -737,14 +761,23 @@ export function QuestionBankEditor({
                 className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 whitespace-nowrap"
               >
                 <FileDown className="h-3.5 w-3.5" />
-                <span>Download Format (.csv)</span>
+                <span>Format .CSV</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadQuestionTemplateXlsx}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 whitespace-nowrap"
+              >
+                <FileDown className="h-3.5 w-3.5" />
+                <span>Format .XLSX</span>
               </button>
               <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 whitespace-nowrap">
                 <Upload className="h-3.5 w-3.5" />
-                <span>Unggah CSV/TXT</span>
+                <span>Unggah CSV / XLSX</span>
                 <input
                   type="file"
-                  accept=".csv,.txt"
+                  data-testid="question-import-file-input"
+                  accept=".csv,.xlsx,.xls,.txt"
                   onChange={handleBulkFileUpload}
                   className="hidden"
                 />
