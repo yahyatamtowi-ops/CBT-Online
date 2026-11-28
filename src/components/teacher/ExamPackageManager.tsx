@@ -5,6 +5,7 @@ import {
   Copy,
   Edit3,
   Plus,
+  Power,
   Shuffle,
   Trash2,
 } from 'lucide-react';
@@ -24,15 +25,15 @@ export function ExamPackageManager({
   onOpenQuestions: (packageId: string) => void;
   onOpenProctoring: (packageId: string) => void;
 }) {
-  const { db, upsertExamPackage, deleteExamPackage } = useCBT();
+  const { db, upsertExamPackage, togglePackagePublished, deleteExamPackage } = useCBT();
   const myPackages = db.packages.filter((p) => p.teacherId === teacher.id);
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
-  const [subject, setSubject] = useState(teacher.subjects[0] || 'Umum');
+  const [subject, setSubject] = useState((teacher.subjects || [])[0] || 'Umum');
   const [targetClasses, setTargetClasses] = useState<string[]>(
-    teacher.classes.length > 0 ? teacher.classes : db.classes.slice(0, 1)
+    (teacher.classes || []).length > 0 ? teacher.classes : db.classes.slice(0, 1)
   );
   const [customClassInput, setCustomClassInput] = useState('');
   const [category, setCategory] = useState<ExamCategory>('Ulangan Resmi');
@@ -43,6 +44,7 @@ export function ExamPackageManager({
   const [shuffleQuestions, setShuffleQuestions] = useState(true);
   const [shuffleOptions, setShuffleOptions] = useState(true);
   const [isPublished, setIsPublished] = useState(true);
+  const [allowIndependentAccess, setAllowIndependentAccess] = useState(true);
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const generateRandomToken = () => {
@@ -57,8 +59,10 @@ export function ExamPackageManager({
   const openCreateForm = () => {
     setEditingId(null);
     setTitle('');
-    setSubject(teacher.subjects[0] || 'Umum');
-    setTargetClasses(teacher.classes.length > 0 ? teacher.classes : db.classes.slice(0, 1));
+    setSubject((teacher.subjects || [])[0] || 'Umum');
+    setTargetClasses(
+      (teacher.classes || []).length > 0 ? teacher.classes : db.classes.slice(0, 1)
+    );
     setCustomClassInput('');
     setCategory('Ulangan Resmi');
     setDurationMinutes(60);
@@ -68,6 +72,7 @@ export function ExamPackageManager({
     setShuffleQuestions(true);
     setShuffleOptions(true);
     setIsPublished(true);
+    setAllowIndependentAccess(true);
     setShowForm(true);
     setFeedback(null);
   };
@@ -86,6 +91,7 @@ export function ExamPackageManager({
     setShuffleQuestions(pkg.shuffleQuestions);
     setShuffleOptions(pkg.shuffleOptions);
     setIsPublished(pkg.isPublished);
+    setAllowIndependentAccess(pkg.allowIndependentAccess ?? true);
     setShowForm(true);
     setFeedback(null);
   };
@@ -131,6 +137,7 @@ export function ExamPackageManager({
       shuffleQuestions,
       shuffleOptions,
       isPublished,
+      allowIndependentAccess,
     });
     onSelectPackage(id);
     setShowForm(false);
@@ -235,6 +242,7 @@ export function ExamPackageManager({
                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
               >
                 <option value="Ulangan Resmi">Ulangan Resmi</option>
+                <option value="UTS / PTS">UTS / PTS</option>
                 <option value="Latihan Mandiri">Latihan Mandiri</option>
               </select>
             </div>
@@ -308,17 +316,28 @@ export function ExamPackageManager({
 
             <div>
               <span className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Publikasi Paket
+                Hak Aktivasi Guru Mapel
               </span>
-              <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 pt-1.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isPublished}
-                  onChange={(e) => setIsPublished(e.target.checked)}
-                  className="rounded border-slate-300 text-indigo-600"
-                />
-                <span>Aktif & dapat diakses siswa</span>
-              </label>
+              <div className="space-y-1.5 pt-1">
+                <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isPublished}
+                    onChange={(e) => setIsPublished(e.target.checked)}
+                    className="rounded border-slate-300 text-indigo-600"
+                  />
+                  <span>Aktifkan soal sekarang (siap dikerjakan)</span>
+                </label>
+                <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allowIndependentAccess}
+                    onChange={(e) => setAllowIndependentAccess(e.target.checked)}
+                    className="rounded border-slate-300 text-indigo-600"
+                  />
+                  <span>Jadwal mandiri guru (Ulangan / Latihan / UTS)</span>
+                </label>
+              </div>
             </div>
           </div>
 
@@ -431,8 +450,14 @@ export function ExamPackageManager({
                       <span className="mx-1.5">·</span>
                       <span>{pkg.category}</span>
                       <span className="mx-1.5">·</span>
-                      <span className={pkg.isPublished ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-amber-700 dark:text-amber-400 font-medium'}>
-                        {pkg.isPublished ? 'Dipublikasikan' : 'Draf'}
+                      <span
+                        className={
+                          pkg.isPublished
+                            ? 'text-emerald-700 dark:text-emerald-400 font-semibold'
+                            : 'text-amber-700 dark:text-amber-400 font-semibold'
+                        }
+                      >
+                        {pkg.isPublished ? 'Aktif — Dapat Dikerjakan' : 'Nonaktif (Draf)'}
                       </span>
                     </div>
                     <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">{pkg.title}</h2>
@@ -501,7 +526,28 @@ export function ExamPackageManager({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      data-testid={`toggle-activate-pkg-${pkg.id}`}
+                      onClick={() => {
+                        const willActivate = !pkg.isPublished;
+                        togglePackagePublished(pkg.id);
+                        setFeedback(
+                          willActivate
+                            ? `Paket "${pkg.title}" diaktifkan. Siswa kelas ${pkg.targetClasses.join(', ')} sekarang dapat langsung mengerjakan ${pkg.category.toLowerCase()}.`
+                            : `Paket "${pkg.title}" dinonaktifkan sementara.`
+                        );
+                      }}
+                      className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors ${
+                        pkg.isPublished
+                          ? 'border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100'
+                          : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      }`}
+                    >
+                      <Power className="h-3.5 w-3.5" />
+                      <span>{pkg.isPublished ? 'Nonaktifkan' : 'Aktifkan Soal'}</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => onOpenQuestions(pkg.id)}

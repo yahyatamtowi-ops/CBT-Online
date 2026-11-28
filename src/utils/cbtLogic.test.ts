@@ -1,34 +1,46 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  MIN_ESSAY_QUESTIONS,
+  MAX_ESSAY_QUESTIONS,
   applyBulkDeleteById,
   applyBulkUserStatus,
   applyCollectiveQuestionEdits,
   applySelectiveDelete,
+  autoDistributePackagePoints,
   buildGradesCSV,
   calculateExamScore,
   computeItemAnalysis,
   computeStudentExamProgress,
+  computeUnlockExtraMinutes,
   distributeQuestionWeights,
   evaluateCameraBehavior,
+  evaluateEssayAnswerSemantic,
   evaluateQuestionCorrectness,
   evaluateViolationEscalation,
+  findStudentPackageAttempt,
   formatSecondsToClock,
   generateGoogleAppsScriptCode,
   generateQuestionsCSVTemplate,
   generateStudentsCSVTemplate,
   generateTeachersCSVTemplate,
   getRemainingMinSubmitSeconds,
+  isAttemptViolationLocked,
   isWithinScheduleWindow,
   lookupStudentAvailableTokens,
+  mergeExamAttempts,
+  normalizeAttemptStatus,
   parseQuestionsBulkText,
   parseStudentsCSV,
   parseTeachersCSV,
+  resolveEffectiveAttemptStatus,
   seededShuffle,
   shouldApplyRemotePull,
   validateAppsScriptUrl,
+  validateEssayQuestionLimit,
   validateStudentLogin,
 } from './cbtLogic';
+import { buildViolationVoiceMessage } from './audioAlert';
 import {
   diagnoseAppsScriptHtmlResponse,
   forwardToAppsScript,
@@ -1081,6 +1093,494 @@ test('computeStudentExamProgress calculates overall and per-exam completion accu
   assert.equal(summary.items[1].itemCompletionPercent, 0);
   assert.equal(summary.items[2].itemCompletionPercent, 100);
 });
+
+test('isAttemptViolationLocked and resolveEffectiveAttemptStatus prevent locked students from showing +5 Menit', () => {
+  const baseAttempt: ExamAttempt = {
+    id: 'att-lock-1',
+    packageId: 'pkg-1',
+    studentId: 'stu-1',
+    studentNisn: '0097740630',
+    studentName: 'ALDANIA ARRAHMA',
+    className: 'XI D',
+    status: 'locked',
+    startedAt: '2026-11-28T02:53:31.339Z',
+    extraMinutes: 0,
+    currentQuestionIndex: 10,
+    questionOrder: ['q1'],
+    optionOrders: {},
+    answers: {},
+    flaggedQuestionIds: [],
+    violationCount: 4,
+    lockReason: 'Terkunci Sistem (Indikasi Kecurangan)',
+  };
+
+  assert.equal(normalizeAttemptStatus(' LOCKED '), 'locked');
+  assert.equal(normalizeAttemptStatus('in_progress'), 'in_progress');
+  assert.equal(isAttemptViolationLocked(baseAttempt, 3), true);
+  assert.equal(resolveEffectiveAttemptStatus(baseAttempt, 3), 'locked');
+
+  // Even if status drifted to in_progress while lockReason or >maxViolationTolerance remains, MUST resolve to locked!
+  const driftedLockReason: ExamAttempt = {
+    ...baseAttempt,
+    status: 'in_progress',
+    violationCount: 2,
+    lockReason: 'Terkunci Sistem (Indikasi Kecurangan)',
+  };
+  assert.equal(resolveEffectiveAttemptStatus(driftedLockReason, 3), 'locked');
+
+  const exceededTolerance: ExamAttempt = {
+    ...baseAttempt,
+    status: 'in_progress',
+    lockReason: undefined,
+    violationCount: 4,
+  };
+  assert.equal(resolveEffectiveAttemptStatus(exceededTolerance, 3), 'locked');
+
+  // Completed attempt with historical violations stays completed
+  const completedWithWarnings: ExamAttempt = {
+    ...baseAttempt,
+    status: 'completed',
+    lockReason: undefined,
+    violationCount: 4,
+  };
+  assert.equal(resolveEffectiveAttemptStatus(completedWithWarnings, 3), 'completed');
+
+  // Unlocked attempt (violationCount reset, no lockReason) resolves cleanly to in_progress
+  const unlockedAttempt: ExamAttempt = {
+    ...baseAttempt,
+    status: 'in_progress',
+    lockReason: undefined,
+    violationCount: 0,
+    unlockedAt: '2026-11-28T03:10:00.000Z',
+  };
+  assert.equal(resolveEffectiveAttemptStatus(unlockedAttempt, 3), 'in_progress');
+});
+
+test('findStudentPackageAttempt matches by NISN after re-import and prioritizes locked attempts over stale duplicates', () => {
+  const student: Pick<StudentRecord, 'id' | 'nisn'> = {
+    id: 'stu-fs-new-id',
+    nisn: '0097740630',
+  };
+
+  const staleInProgress: ExamAttempt = {
+    id: 'att-old',
+    packageId: 'pkg-1',
+    studentId: 'stu-fs-new-id',
+    studentNisn: '0097740630',
+    studentName: 'ALDANIA ARRAHMA',
+    className: 'XI D',
+    status: 'in_progress',
+    startedAt: '2026-11-28T02:50:00.000Z',
+    extraMinutes: 0,
+    currentQuestionIndex: 1,
+    questionOrder: ['q1'],
+    optionOrders: {},
+    answers: {},
+    flaggedQuestionIds: [],
+    violationCount: 0,
+  };
+
+  const lockedByOldId: ExamAttempt = {
+    ...staleInProgress,
+    id: 'att-locked',
+    studentId: 'stu-csv-1795749933416-271',
+    status: 'locked',
+    violationCount: 4,
+    lockReason: 'Terkunci Sistem (Indikasi Kecurangan)',
+    submittedAt: '2026-11-28T02:56:17.096Z',
+  };
+
+  const matched = findStudentPackageAttempt(
+    [staleInProgress, lockedByOldId],
+    student,
+    'pkg-1',
+    3
+  );
+  assert.equal(matched?.id, 'att-locked');
+  assert.equal(resolveEffectiveAttemptStatus(matched, 3), 'locked');
+});
+
+test('computeUnlockExtraMinutes guarantees resume time when exam expired while locked', () => {
+  const startedAt = '2026-11-28T01:00:00.000Z';
+  const durationMinutes = 60;
+  // 20 minutes after start -> 40 min left -> no extra minutes needed
+  const stillHasTime = computeUnlockExtraMinutes(
+    { startedAt, extraMinutes: 0 },
+    durationMinutes,
+    Date.parse('2026-11-28T01:20:00.000Z'),
+    10
+  );
+  assert.equal(stillHasTime, 0);
+
+  // 90 minutes after start (already 30 min past original end) -> grants enough extraMinutes for 10 min resume
+  const expiredWhileLocked = computeUnlockExtraMinutes(
+    { startedAt, extraMinutes: 0 },
+    durationMinutes,
+    Date.parse('2026-11-28T02:30:00.000Z'),
+    10
+  );
+  assert.equal(expiredWhileLocked, 40);
+});
+
+test('mergeExamAttempts preserves newer teacher unlock against stale remote locked snapshot', () => {
+  const remoteStaleLocked: ExamAttempt = {
+    id: 'att-1',
+    packageId: 'pkg-1',
+    studentId: 'stu-1',
+    studentNisn: '0097740630',
+    studentName: 'ALDANIA ARRAHMA',
+    className: 'XI D',
+    status: 'locked',
+    startedAt: '2026-11-28T02:53:31.339Z',
+    submittedAt: '2026-11-28T02:56:17.096Z',
+    extraMinutes: 0,
+    currentQuestionIndex: 49,
+    questionOrder: ['q1'],
+    optionOrders: {},
+    answers: { q1: 'A' },
+    flaggedQuestionIds: [],
+    violationCount: 4,
+    lockReason: 'Terkunci Sistem (Indikasi Kecurangan)',
+  };
+
+  const localUnlocked: ExamAttempt = {
+    ...remoteStaleLocked,
+    status: 'in_progress',
+    submittedAt: undefined,
+    lockReason: undefined,
+    violationCount: 0,
+    unlockedAt: '2026-11-28T03:05:00.000Z',
+    updatedAt: '2026-11-28T03:05:00.000Z',
+  };
+
+  // Teacher unlocked locally, then stale remote locked snapshot arrives -> keep unlocked!
+  const mergedTeacherSide = mergeExamAttempts([localUnlocked], [remoteStaleLocked], 3);
+  assert.equal(mergedTeacherSide.length, 1);
+  assert.equal(mergedTeacherSide[0].status, 'in_progress');
+  assert.equal(mergedTeacherSide[0].violationCount, 0);
+
+  // Student is locked locally, teacher unlocks remotely -> student pull receives unlock!
+  const mergedStudentSide = mergeExamAttempts([remoteStaleLocked], [localUnlocked], 3);
+  assert.equal(mergedStudentSide.length, 1);
+  assert.equal(mergedStudentSide[0].status, 'in_progress');
+  assert.equal(mergedStudentSide[0].unlockedAt, '2026-11-28T03:05:00.000Z');
+});
+
+test('evaluateEssayAnswerSemantic grades exact, paraphrased, partial, and empty answers proportionally', () => {
+  const answerKey =
+    'Fotosintesis adalah proses tumbuhan hijau mengubah energi cahaya matahari, air, dan karbon dioksida menjadi glukosa serta oksigen.';
+  const keywords = ['tumbuhan', 'cahaya matahari', 'air', 'karbon dioksida', 'glukosa', 'oksigen'];
+
+  // 1. Exact match -> 100%
+  const exact = evaluateEssayAnswerSemantic(answerKey, answerKey, keywords, 20);
+  assert.equal(exact.matchPercent, 100);
+  assert.equal(exact.earnedPoints, 20);
+  assert.equal(exact.isCorrect, true);
+
+  // 2. Different diction with the exact same semantic meaning -> high score & proportional points
+  const paraphrased = evaluateEssayAnswerSemantic(
+    'Asimilasi merupakan mekanisme tanaman berklorofil mengkonversi sinar surya, H2O, dan CO2 untuk memproduksi gula karbohidrat beserta O2.',
+    answerKey,
+    keywords,
+    20
+  );
+  assert.ok(
+    paraphrased.matchPercent >= 75,
+    `Expected paraphrased matchPercent >= 75, got ${paraphrased.matchPercent}`
+  );
+  assert.equal(paraphrased.isCorrect, true);
+  assert.ok(paraphrased.earnedPoints >= 15 && paraphrased.earnedPoints <= 20);
+
+  // 3. Partial answer -> intermediate proportional points
+  const partial = evaluateEssayAnswerSemantic(
+    'Tanaman memakai sinar matahari dan air untuk menghasilkan gula.',
+    answerKey,
+    keywords,
+    20
+  );
+  assert.ok(partial.earnedPoints > 0 && partial.earnedPoints < 20);
+
+  // 4. Empty or completely unrelated answer -> 0 points
+  const empty = evaluateEssayAnswerSemantic('   ', answerKey, keywords, 20);
+  assert.equal(empty.earnedPoints, 0);
+  assert.equal(empty.matchPercent, 0);
+  assert.equal(empty.isCorrect, false);
+
+  const unrelated = evaluateEssayAnswerSemantic(
+    'Sepak bola dimainkan oleh sebelas pemain di stadion rumput.',
+    answerKey,
+    keywords,
+    20
+  );
+  assert.equal(unrelated.isCorrect, false);
+  assert.ok(unrelated.matchPercent < 20);
+});
+
+test('validateEssayQuestionLimit enforces 5 to 10 essay questions per package', () => {
+  assert.equal(MIN_ESSAY_QUESTIONS, 5);
+  assert.equal(MAX_ESSAY_QUESTIONS, 10);
+
+  const makeEssay = (i: number, pkg = 'pkg-e'): Question => ({
+    id: `qe-${i}`,
+    packageId: pkg,
+    type: 'essay',
+    prompt: `Esai ${i}`,
+    essayAnswerKey: `Kunci esai ${i}`,
+    points: 20,
+    explanation: '',
+  });
+
+  // 0 essays -> valid (not an essay package)
+  const zero = validateEssayQuestionLimit([], 'pkg-e');
+  assert.equal(zero.isValidRange, true);
+  assert.equal(zero.isUnderMin, false);
+  assert.equal(zero.canAddMore, true);
+
+  // 3 essays -> under minimum 5
+  const three = validateEssayQuestionLimit([1, 2, 3].map((i) => makeEssay(i)), 'pkg-e');
+  assert.equal(three.essayCount, 3);
+  assert.equal(three.isUnderMin, true);
+  assert.equal(three.isValidRange, false);
+  assert.equal(three.canAddMore, true);
+
+  // 5 essays -> valid
+  const five = validateEssayQuestionLimit([1, 2, 3, 4, 5].map((i) => makeEssay(i)), 'pkg-e');
+  assert.equal(five.essayCount, 5);
+  assert.equal(five.isUnderMin, false);
+  assert.equal(five.isValidRange, true);
+  assert.equal(five.canAddMore, true);
+
+  // 10 essays -> valid and at max
+  const ten = validateEssayQuestionLimit(
+    Array.from({ length: 10 }, (_, idx) => makeEssay(idx + 1)),
+    'pkg-e'
+  );
+  assert.equal(ten.essayCount, 10);
+  assert.equal(ten.isValidRange, true);
+  assert.equal(ten.isAtMax, true);
+  assert.equal(ten.canAddMore, false);
+});
+
+test('autoDistributePackagePoints balances target package questions to exact total 100 without touching other packages', () => {
+  const mixed: Question[] = [
+    ...Array.from({ length: 6 }, (_, i) => ({
+      id: `p1-q${i + 1}`,
+      packageId: 'pkg-1',
+      type: 'essay' as const,
+      prompt: `Soal esai ${i + 1}`,
+      essayAnswerKey: `Kunci ${i + 1}`,
+      points: 10,
+      explanation: '',
+    })),
+    {
+      id: 'p2-q1',
+      packageId: 'pkg-2',
+      type: 'single_choice',
+      prompt: 'Paket lain',
+      options: [
+        { id: 'A', text: '1' },
+        { id: 'B', text: '2' },
+      ],
+      correctOptionId: 'A',
+      points: 50,
+      explanation: '',
+    },
+  ];
+
+  const balanced = autoDistributePackagePoints(mixed, 'pkg-1', 100);
+  const pkg1Total = Number(
+    balanced
+      .filter((q) => q.packageId === 'pkg-1')
+      .reduce((sum, q) => sum + q.points, 0)
+      .toFixed(2)
+  );
+  assert.equal(pkg1Total, 100);
+  assert.equal(balanced.find((q) => q.id === 'p2-q1')?.points, 50);
+});
+
+test('parseQuestionsBulkText parses ESAI lines and calculateExamScore returns essayGrades', () => {
+  const bulk =
+    'ESAI | Jelaskan pengertian inflasi! | Inflasi adalah kenaikan harga barang dan jasa secara umum dan terus menerus dalam jangka waktu tertentu. | kenaikan harga;barang jasa;terus menerus | Inflasi menurunkan daya beli uang.';
+  const parsed = parseQuestionsBulkText(bulk, 'pkg-esai');
+  assert.equal(parsed.errors.length, 0);
+  assert.equal(parsed.questions.length, 1);
+  assert.equal(parsed.questions[0].type, 'essay');
+  assert.match(parsed.questions[0].essayAnswerKey ?? '', /kenaikan harga/i);
+  assert.deepEqual(parsed.questions[0].essayKeywords, [
+    'kenaikan harga',
+    'barang jasa',
+    'terus menerus',
+  ]);
+
+  const scored = calculateExamScore(
+    parsed.questions,
+    {
+      [parsed.questions[0].id]:
+        'Inflasi merupakan lonjakan harga produk dan jasa secara meluas yang berlangsung terus menerus.',
+    },
+    75
+  );
+  assert.ok(scored.score >= 70, `Expected essay score >= 70, got ${scored.score}`);
+  assert.ok(scored.essayGrades[parsed.questions[0].id]);
+  assert.ok(scored.essayGrades[parsed.questions[0].id].matchPercent >= 70);
+});
+
+test('teacher-activated packages (allowIndependentAccess) bypass admin schedule hold for Ulangan, Latihan, and UTS', () => {
+  const students: StudentRecord[] = [
+    { id: 's1', nisn: '0089001122', name: 'Rizky Pratama', className: 'X-IPA-1', active: true },
+  ];
+  const teacherActivatedPkg: ExamPackage = {
+    id: 'pkg-uts-guru',
+    teacherId: 't1',
+    title: 'UTS Biologi Mandiri',
+    subject: 'Biologi',
+    targetClasses: ['X-IPA-1'],
+    category: 'UTS / PTS',
+    durationMinutes: 60,
+    minSubmitMinutes: 10,
+    kkm: 75,
+    token: 'UTSBI01',
+    shuffleQuestions: true,
+    shuffleOptions: true,
+    isPublished: true,
+    allowIndependentAccess: true,
+    teacherActivatedAt: '2026-11-27T10:00:00.000Z',
+    createdAt: '2026-11-27T09:00:00.000Z',
+  };
+  const closedSchedule: SessionScheduleConfig = {
+    tokenReleaseMode: 'manual',
+    tokensReleased: false,
+    enforceTimeWindow: true,
+    accessStartTime: '07:00',
+    accessEndTime: '08:00',
+    autoReleaseDateTime: '07:00',
+    emergencyForceFinishedAt: null,
+  };
+  const afternoonTime = new Date(2026, 10, 27, 14, 30, 0);
+
+  const lookup = lookupStudentAvailableTokens({
+    nisn: '0089001122',
+    students,
+    packages: [teacherActivatedPkg],
+    schedule: closedSchedule,
+    now: afternoonTime,
+  });
+  assert.equal(lookup.status, 'ready');
+  if (lookup.status === 'ready') {
+    assert.equal(lookup.packages.length, 1);
+    assert.equal(lookup.packages[0].token, 'UTSBI01');
+  }
+
+  const login = validateStudentLogin({
+    nisn: '0089001122',
+    token: 'UTSBI01',
+    students,
+    packages: [teacherActivatedPkg],
+    schedule: closedSchedule,
+    now: afternoonTime,
+  });
+  assert.equal(login.ok, true);
+  assert.equal(login.examPackage?.id, 'pkg-uts-guru');
+});
+
+test('upgraded evaluateCameraBehavior detects eyeYaw, looking down, missing face, and multiple faces', () => {
+  const yawStep1 = evaluateCameraBehavior({
+    horizontalShift: 0.04,
+    eyeYawScore: -0.22,
+    lateralMotionScore: 0.05,
+    audioRms: 0.01,
+    consecutiveTurnFrames: 0,
+    consecutiveSpeechFrames: 0,
+  });
+  assert.equal(yawStep1.status, 'looking_away');
+  assert.equal(yawStep1.shouldFlagViolation, false);
+  assert.equal(yawStep1.nextTurnFrames, 1);
+
+  const yawStep2 = evaluateCameraBehavior({
+    horizontalShift: 0.04,
+    eyeYawScore: -0.22,
+    lateralMotionScore: 0.05,
+    audioRms: 0.01,
+    consecutiveTurnFrames: yawStep1.nextTurnFrames,
+    consecutiveSpeechFrames: 0,
+  });
+  assert.equal(yawStep2.shouldFlagViolation, true);
+  assert.match(yawStep2.violationDetail ?? '', /ke kiri/i);
+
+  const lookDown = evaluateCameraBehavior({
+    horizontalShift: 0.01,
+    verticalShift: 0.24,
+    lateralMotionScore: 0.02,
+    audioRms: 0.01,
+    consecutiveTurnFrames: 0,
+    consecutiveSpeechFrames: 0,
+    consecutiveVerticalFrames: 1,
+  });
+  assert.equal(lookDown.status, 'looking_down');
+  assert.equal(lookDown.shouldFlagViolation, true);
+  assert.match(lookDown.violationType ?? '', /Menunduk/i);
+
+  const noFace = evaluateCameraBehavior({
+    horizontalShift: 0,
+    lateralMotionScore: 0,
+    audioRms: 0,
+    faceDetected: false,
+    faceCount: 0,
+    consecutiveTurnFrames: 0,
+    consecutiveSpeechFrames: 0,
+    consecutiveMissingFaceFrames: 1,
+  });
+  assert.equal(noFace.status, 'no_face');
+  assert.equal(noFace.shouldFlagViolation, true);
+  assert.match(noFace.violationType ?? '', /Wajah Tidak Terdeteksi/i);
+
+  const multiFace = evaluateCameraBehavior({
+    horizontalShift: 0,
+    lateralMotionScore: 0,
+    audioRms: 0,
+    faceDetected: true,
+    faceCount: 2,
+    consecutiveTurnFrames: 0,
+    consecutiveSpeechFrames: 0,
+    consecutiveMissingFaceFrames: 1,
+  });
+  assert.equal(multiFace.status, 'multiple_faces');
+  assert.equal(multiFace.shouldFlagViolation, true);
+  assert.match(multiFace.violationType ?? '', /Lebih dari 1 Wajah/i);
+});
+
+test('buildViolationVoiceMessage generates tailored Indonesian female reprimands', () => {
+  const ssMsg = buildViolationVoiceMessage({
+    type: 'Upaya Screenshot / Cetak Layar',
+    severity: 'warning',
+    count: 1,
+    maxTolerance: 3,
+  });
+  assert.match(ssMsg, /tangkapan layar/i);
+  assert.match(ssMsg, /peringatan ke 1 dari 3/i);
+
+  const notifMsg = buildViolationVoiceMessage({
+    type: 'Membuka Bilah Notifikasi / Geser Tepi Atas',
+    severity: 'warning',
+    count: 2,
+    maxTolerance: 3,
+  });
+  assert.match(notifMsg, /bilah notifikasi/i);
+
+  const camMsg = buildViolationVoiceMessage({
+    type: 'Deteksi Kamera: Melihat Kanan / Kiri',
+    severity: 'warning',
+  });
+  assert.match(camMsg, /menoleh/i);
+
+  const lockedMsg = buildViolationVoiceMessage({
+    type: 'Pindah Tab',
+    severity: 'critical',
+  });
+  assert.match(lockedMsg, /dikunci otomatis/i);
+});
+
+
 
 
 

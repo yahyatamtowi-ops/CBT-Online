@@ -437,9 +437,9 @@ export function CloudWorkspaceSyncCard() {
               Integrasi Langsung Google Sheets, Drive & Firebase Cloud
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-              Masuk dengan akun Google untuk mencadangkan data CBT ke Firebase Firestore serta membaca atau menulis langsung ke Google Sheets di Google Drive Anda.
+              Aplikasi terhubung otomatis ke Firebase Cloud &amp; Google Apps Script lintas perangkat tanpa perlu login Google. Masuk dengan akun Google hanya bersifat opsional jika Super Admin ingin mengekspor langsung ke Google Drive.
             </p>
-            {googleUser && (
+            {googleUser ? (
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500 dark:text-slate-400">
                 <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400">
                   <ShieldCheck className="h-3.5 w-3.5" />
@@ -449,11 +449,16 @@ export function CloudWorkspaceSyncCard() {
                 <span>
                   Akses Google Sheets:{' '}
                   <strong className={accessToken ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}>
-                    {accessToken ? 'Aktif (Sesi Ini)' : 'Perlu Sign-In Ulang'}
+                    {accessToken ? 'Aktif (Sesi Ini)' : 'Opsional (Sign-In jika ingin ekspor Drive)'}
                   </strong>
                 </span>
               </div>
-            )}
+            ) : firestoreAutoSync.connected ? (
+              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                <span>Terhubung Otomatis ke Firebase Cloud Sekolah (Tanpa Login Google)</span>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -502,7 +507,7 @@ export function CloudWorkspaceSyncCard() {
                   Penyimpanan Cloud Firebase Firestore (Maks. 999 Siswa)
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                  Terhubung otomatis lintas perangkat tanpa perlu Sign-In ulang untuk menerima data sekolah & Apps Script. Masuk dengan Google jika ingin mencadangkan perubahan langsung dari perangkat ini.
+                  Terhubung otomatis lintas perangkat tanpa perlu Sign-In ulang untuk menerima data sekolah &amp; Apps Script. Masuk dengan Google jika ingin mencadangkan perubahan langsung dari perangkat ini.
                 </p>
                 {firestoreAutoSync.connected && (
                   <p className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 mt-1">

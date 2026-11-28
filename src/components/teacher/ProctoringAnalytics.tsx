@@ -7,6 +7,7 @@ import {
   Download,
   Lock,
   PlusCircle,
+  RefreshCw,
   RotateCcw,
   Unlock,
 } from 'lucide-react';
@@ -15,7 +16,9 @@ import type { TeacherAccount } from '../../types/cbt';
 import {
   buildGradesCSV,
   computeItemAnalysis,
+  findStudentPackageAttempt,
   isQuestionAnswered,
+  resolveEffectiveAttemptStatus,
 } from '../../utils/cbtLogic';
 
 export function ProctoringAnalytics({
@@ -27,10 +30,18 @@ export function ProctoringAnalytics({
   selectedPackageId: string;
   onSelectPackage: (id: string) => void;
 }) {
-  const { db, unlockOrResetAttempt, addExtraTimeToAttempt } = useCBT();
+  const {
+    db,
+    unlockOrResetAttempt,
+    addExtraTimeToAttempt,
+    pullDatabaseFromSpreadsheet,
+    syncRuntime,
+  } = useCBT();
   const [subView, setSubView] = useState<'proctoring' | 'analysis'>('proctoring');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [notice, setNotice] = useState<string | null>(null);
+  const [busyAttemptId, setBusyAttemptId] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const myPackages = db.packages.filter((p) => p.teacherId === teacher.id);
   const currentPkg =
@@ -47,17 +58,29 @@ export function ProctoringAnalytics({
   const pkgQuestions = db.questions.filter((q) => q.packageId === currentPkg.id);
   const pkgAttempts = db.attempts.filter((a) => a.packageId === currentPkg.id);
   const attemptedStudentIds = new Set(pkgAttempts.map((a) => a.studentId));
+  const attemptedStudentNisns = new Set(
+    pkgAttempts.map((a) => a.studentNisn.trim()).filter(Boolean)
+  );
   const targetStudents = db.students.filter(
     (s) =>
       currentPkg.targetClasses.length === 0 ||
       currentPkg.targetClasses.includes(s.className) ||
-      attemptedStudentIds.has(s.id)
+      attemptedStudentIds.has(s.id) ||
+      attemptedStudentNisns.has(s.nisn.trim())
   );
 
-  // Merge target students with their attempt state so teachers see "Belum Login" too
+  // Merge target students with their authoritative attempt status so locked students ALWAYS show "Buka Kunci"
   const rosterRows = targetStudents.map((student) => {
-    const attempt = pkgAttempts.find((a) => a.studentId === student.id);
-    const status = attempt ? attempt.status : 'not_started';
+    const attempt = findStudentPackageAttempt(
+      pkgAttempts,
+      student,
+      currentPkg.id,
+      db.security.maxViolationTolerance
+    );
+    const status = resolveEffectiveAttemptStatus(
+      attempt,
+      db.security.maxViolationTolerance
+    );
     return { student, attempt, status };
   });
 
@@ -71,6 +94,20 @@ export function ProctoringAnalytics({
   const inProgressCount = rosterRows.filter((r) => r.status === 'in_progress').length;
   const lockedCount = rosterRows.filter((r) => r.status === 'locked').length;
   const notStartedCount = rosterRows.filter((r) => r.status === 'not_started').length;
+
+  const handleRefreshLive = async () => {
+    setIsRefreshing(true);
+    try {
+      const res = await pullDatabaseFromSpreadsheet(undefined, { manual: true });
+      setNotice(
+        res.ok
+          ? 'Data Live Monitoring berhasil diperbarui dari server.'
+          : res.message
+      );
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const handleExportCSV = () => {
     const csv = buildGradesCSV(currentPkg, pkgAttempts);
@@ -109,6 +146,16 @@ export function ProctoringAnalytics({
               </option>
             ))}
           </select>
+
+          <button
+            type="button"
+            disabled={isRefreshing || syncRuntime.status === 'syncing'}
+            onClick={handleRefreshLive}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 whitespace-nowrap shrink-0"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <span>{isRefreshing ? 'Memuat...' : 'Segarkan'}</span>
+          </button>
 
           <button
             type="button"
@@ -320,49 +367,67 @@ export function ProctoringAnalytics({
                       <td className="px-4 py-3.5 text-right whitespace-nowrap">
                         {attempt ? (
                           <div className="inline-flex items-center gap-1.5">
-                            {attempt.status === 'locked' && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  unlockOrResetAttempt(attempt.id, 'unlock');
-                                  setNotice(
-                                    `Kunci ujian ${student.name} berhasil dibuka. Siswa dapat melanjutkan.`
-                                  );
-                                }}
-                                className="inline-flex items-center gap-1 rounded-md border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 px-2.5 py-1 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
-                              >
-                                <Unlock className="h-3 w-3" />
-                                <span>Buka Kunci</span>
-                              </button>
+                            {busyAttemptId === attempt.id ? (
+                              <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                                <RefreshCw className="h-3 w-3 animate-spin" />
+                                <span>Menyimpan...</span>
+                              </span>
+                            ) : (
+                              <>
+                                {status === 'locked' && (
+                                  <button
+                                    type="button"
+                                    aria-label={`Buka Kunci ${student.name}`}
+                                    onClick={async () => {
+                                      setBusyAttemptId(attempt.id);
+                                      try {
+                                        const res = await unlockOrResetAttempt(attempt.id, 'unlock');
+                                        setNotice(res.message);
+                                      } finally {
+                                        setBusyAttemptId(null);
+                                      }
+                                    }}
+                                    className="inline-flex items-center gap-1 rounded-md border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 px-2.5 py-1 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60"
+                                  >
+                                    <Unlock className="h-3 w-3" />
+                                    <span>Buka Kunci</span>
+                                  </button>
+                                )}
+                                {status === 'in_progress' && (
+                                  <button
+                                    type="button"
+                                    aria-label={`Tambah 5 Menit ${student.name}`}
+                                    onClick={() => {
+                                      addExtraTimeToAttempt(attempt.id, 5);
+                                      setNotice(
+                                        `Waktu pengerjaan ${student.name} ditambah +5 menit.`
+                                      );
+                                    }}
+                                    className="inline-flex items-center gap-1 rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 px-2.5 py-1 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50"
+                                  >
+                                    <PlusCircle className="h-3 w-3" />
+                                    <span>+5 Menit</span>
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  aria-label={`Reset ${student.name}`}
+                                  onClick={async () => {
+                                    setBusyAttemptId(attempt.id);
+                                    try {
+                                      const res = await unlockOrResetAttempt(attempt.id, 'reset');
+                                      setNotice(res.message);
+                                    } finally {
+                                      setBusyAttemptId(null);
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700"
+                                >
+                                  <RotateCcw className="h-3 w-3" />
+                                  <span>Reset</span>
+                                </button>
+                              </>
                             )}
-                            {attempt.status === 'in_progress' && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  addExtraTimeToAttempt(attempt.id, 5);
-                                  setNotice(
-                                    `Waktu pengerjaan ${student.name} ditambah +5 menit.`
-                                  );
-                                }}
-                                className="inline-flex items-center gap-1 rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 px-2.5 py-1 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50"
-                              >
-                                <PlusCircle className="h-3 w-3" />
-                                <span>+5 Menit</span>
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                unlockOrResetAttempt(attempt.id, 'reset');
-                                setNotice(
-                                  `Riwayat ujian ${student.name} direset. Siswa dapat mengulang sesi.`
-                                );
-                              }}
-                              className="inline-flex items-center gap-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700"
-                            >
-                              <RotateCcw className="h-3 w-3" />
-                              <span>Reset</span>
-                            </button>
                           </div>
                         ) : (
                           <span className="text-slate-400">Menunggu login</span>

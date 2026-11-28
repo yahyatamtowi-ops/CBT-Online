@@ -95,9 +95,26 @@
   -webkit-touch-callout: none;
 }
 
+.exam-no-select textarea,
+.exam-no-select input {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 @media print {
-  .exam-print-shield {
+  .exam-print-shield,
+  .exam-print-shield * {
     display: none !important;
+    visibility: hidden !important;
+  }
+  body::after {
+    content: "Pencetakan & Tangkapan Layar Diblokir oleh Sistem Keamanan CerdasExam CBT";
+    display: block;
+    padding: 3rem;
+    text-align: center;
+    font-size: 18px;
+    font-weight: 700;
+    color: #991b1b;
   }
 }
 

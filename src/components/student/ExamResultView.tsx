@@ -1,15 +1,19 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
   Lock,
   LogOut,
+  RefreshCw,
   ShieldCheck,
   XCircle,
 } from 'lucide-react';
 import { useCBT } from '../../context/CBTContext';
 import type { ExamAttempt, ExamPackage, Question } from '../../types/cbt';
-import { evaluateQuestionCorrectness } from '../../utils/cbtLogic';
+import {
+  evaluateQuestionCorrectness,
+  isAttemptViolationLocked,
+} from '../../utils/cbtLogic';
 import { SchoolLogo } from '../LandingPortal';
 
 export function ExamResultView({
@@ -25,11 +29,28 @@ export function ExamResultView({
   onBackToDashboard?: () => void;
   onLogout: () => void;
 }) {
-  const { db } = useCBT();
-  const isLocked = attempt.status === 'locked';
+  const { db, pullDatabaseFromSpreadsheet } = useCBT();
+  const [checkingUnlock, setCheckingUnlock] = useState(false);
+  const [checkMsg, setCheckMsg] = useState<string | null>(null);
+  const isLocked = isAttemptViolationLocked(attempt, db.security.maxViolationTolerance);
   const showScoreAndReview =
     db.security.showScoreAndExplanationAuto ||
     examPackage.category === 'Latihan Mandiri';
+
+  const handleCheckUnlock = async () => {
+    setCheckingUnlock(true);
+    setCheckMsg(null);
+    try {
+      const res = await pullDatabaseFromSpreadsheet(undefined, { manual: true });
+      if (!res.ok) {
+        setCheckMsg(res.message);
+      } else {
+        setCheckMsg('Status terbaru berhasil diperiksa. Jika guru sudah membuka kunci, sesi akan otomatis terbuka.');
+      }
+    } finally {
+      setCheckingUnlock(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50/90 dark:bg-slate-950/95 text-slate-900 dark:text-slate-100 flex flex-col batik-shell">
@@ -171,9 +192,27 @@ export function ExamResultView({
           </div>
 
           {isLocked && (
-            <p className="text-xs text-rose-800 dark:text-rose-200 bg-white/80 dark:bg-slate-900/80 rounded-lg border border-rose-200 dark:border-rose-800 p-3">
-              Sesi Anda dikunci otomatis karena melampaui batas toleransi pelanggaran keamanan. Hubungi guru pengampu jika terdapat kendala teknis untuk membuka kunci ujian.
-            </p>
+            <div className="rounded-lg border border-rose-200 dark:border-rose-800 bg-white/80 dark:bg-slate-900/80 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <p className="text-xs text-rose-800 dark:text-rose-200">
+                  Sesi Anda dikunci otomatis karena melampaui batas toleransi pelanggaran keamanan. Hubungi guru pengampu untuk membuka kunci ujian.
+                </p>
+                {checkMsg && (
+                  <p className="text-[11px] font-medium text-slate-600 dark:text-slate-300">
+                    {checkMsg}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                disabled={checkingUnlock}
+                onClick={handleCheckUnlock}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 px-3 py-1.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 disabled:opacity-60 whitespace-nowrap shrink-0"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${checkingUnlock ? 'animate-spin' : ''}`} />
+                <span>{checkingUnlock ? 'Memeriksa...' : 'Cek Status Buka Kunci'}</span>
+              </button>
+            </div>
           )}
         </section>
 
@@ -191,7 +230,11 @@ export function ExamResultView({
 
             {questions.map((q, idx) => {
               const ans = attempt.answers[q.id];
-              const res = evaluateQuestionCorrectness(q, ans);
+              const res = evaluateQuestionCorrectness(
+                q,
+                ans,
+                attempt.essayGrades?.[q.id]
+              );
 
               const lookupOption = (optId: string) => {
                 const found = q.options?.find((o) => o.id === optId);
@@ -200,6 +243,11 @@ export function ExamResultView({
 
               const formatAnswer = (val: typeof ans) => {
                 if (val === undefined || val === null) return 'Tidak dijawab';
+                if (q.type === 'essay') {
+                  return typeof val === 'string' && val.trim()
+                    ? val.trim()
+                    : 'Tidak dijawab';
+                }
                 if (typeof val === 'boolean') return val ? 'BENAR' : 'SALAH';
                 if (Array.isArray(val))
                   return val.length > 0 ? val.map(lookupOption).join(' · ') : 'Tidak dijawab';
@@ -216,6 +264,7 @@ export function ExamResultView({
               };
 
               const formatKey = () => {
+                if (q.type === 'essay') return q.essayAnswerKey || '-';
                 if (q.type === 'single_choice')
                   return q.correctOptionId ? lookupOption(q.correctOptionId) : '-';
                 if (q.type === 'multiple_choice')
@@ -229,31 +278,53 @@ export function ExamResultView({
                 return '-';
               };
 
+              const essaySimilarityPct =
+                q.type === 'essay' && res.essayGrade
+                  ? res.essayGrade.matchPercent
+                  : null;
+
               return (
                 <article
                   key={q.id}
                   className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-3"
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="text-xs">
+                    <div className="text-xs flex flex-wrap items-center gap-1.5">
                       <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
                         Soal #{idx + 1}
                       </span>
-                      <span className="mx-1.5 text-slate-400">·</span>
+                      <span className="text-slate-400">·</span>
                       <span
                         className={`inline-flex items-center gap-1 font-semibold ${
-                          res.isCorrect ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'
+                          res.isCorrect
+                            ? 'text-emerald-700 dark:text-emerald-400'
+                            : res.earnedPoints > 0
+                              ? 'text-amber-700 dark:text-amber-400'
+                              : 'text-rose-700 dark:text-rose-400'
                         }`}
                       >
                         {res.isCorrect ? (
                           <>
                             <CheckCircle2 className="h-3.5 w-3.5" />
-                            <span>Benar</span>
+                            <span>
+                              {q.type === 'essay'
+                                ? `Sesuai Makna (${essaySimilarityPct}%)`
+                                : 'Benar'}
+                            </span>
+                          </>
+                        ) : res.earnedPoints > 0 && q.type === 'essay' ? (
+                          <>
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            <span>Sebagian Sesuai ({essaySimilarityPct}%)</span>
                           </>
                         ) : (
                           <>
                             <XCircle className="h-3.5 w-3.5" />
-                            <span>Kurang Tepat</span>
+                            <span>
+                              {q.type === 'essay' && essaySimilarityPct !== null
+                                ? `Kurang Tepat (${essaySimilarityPct}%)`
+                                : 'Kurang Tepat'}
+                            </span>
                           </>
                         )}
                       </span>
@@ -270,17 +341,26 @@ export function ExamResultView({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                     <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 p-3">
                       <span className="text-slate-500 dark:text-slate-400 block">Jawaban Anda</span>
-                      <span className="font-semibold text-slate-900 dark:text-slate-100">
+                      <span className="font-semibold text-slate-900 dark:text-slate-100 whitespace-pre-wrap">
                         {formatAnswer(ans)}
                       </span>
                     </div>
                     <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50/70 dark:bg-emerald-950/40 p-3">
-                      <span className="text-emerald-700 dark:text-emerald-400 block">Kunci Jawaban</span>
-                      <span className="font-semibold text-emerald-950 dark:text-emerald-200">
+                      <span className="text-emerald-700 dark:text-emerald-400 block">
+                        {q.type === 'essay' ? 'Kunci Jawaban Acuan Makna' : 'Kunci Jawaban'}
+                      </span>
+                      <span className="font-semibold text-emerald-950 dark:text-emerald-200 whitespace-pre-wrap">
                         {formatKey()}
                       </span>
                     </div>
                   </div>
+
+                  {q.type === 'essay' && res.essayGrade?.feedback && (
+                    <div className="rounded-lg border border-indigo-100 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/30 px-3 py-2 text-xs text-indigo-900 dark:text-indigo-200">
+                      <span className="font-semibold">Evaluasi Koreksi Otomatis: </span>
+                      {res.essayGrade.feedback}
+                    </div>
+                  )}
 
                   <div className="text-xs text-slate-600 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800 pt-2.5">
                     <span className="font-semibold text-slate-900 dark:text-slate-100">Pembahasan: </span>

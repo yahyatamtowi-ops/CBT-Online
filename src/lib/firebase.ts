@@ -41,7 +41,10 @@ function createFirestoreInstance(): Firestore {
   try {
     return initializeFirestore(
       app,
-      { cacheSizeBytes: CACHE_SIZE_UNLIMITED },
+      {
+        cacheSizeBytes: CACHE_SIZE_UNLIMITED,
+        experimentalAutoDetectLongPolling: true,
+      },
       firebaseConfig.firestoreDatabaseId
     );
   } catch {
@@ -187,6 +190,26 @@ export async function googleSignIn(): Promise<{ user: User; accessToken: string 
     }
     cachedAccessToken = credential.accessToken;
     return { user: result.user, accessToken: cachedAccessToken };
+  } catch (err) {
+    const code =
+      err && typeof err === 'object' && 'code' in err
+        ? String((err as { code?: unknown }).code)
+        : '';
+    if (code === 'auth/unauthorized-domain') {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'domain ini';
+      throw new Error(
+        `Domain "${host}" belum ditambahkan di Firebase Console (Authentication > Settings > Authorized domains). Koneksi otomatis ke Firebase Cloud & Apps Script tetap aktif tanpa perlu login Google.`
+      );
+    }
+    if (code === 'auth/popup-blocked') {
+      throw new Error(
+        'Popup login Google diblokir oleh browser. Izinkan popup untuk situs ini jika ingin masuk dengan akun Google.'
+      );
+    }
+    if (code === 'auth/popup-closed-by-user') {
+      throw new Error('Jendela login Google ditutup sebelum selesai.');
+    }
+    throw err;
   } finally {
     isSigningIn = false;
   }

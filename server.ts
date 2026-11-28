@@ -7,6 +7,10 @@ import {
   validateStrictAppsScriptUrl,
   type AppsScriptAction,
 } from './src/utils/appsScriptProxy.ts';
+import {
+  gradeEssaysWithGemini,
+  type EssayGradeRequestItem,
+} from './src/utils/essayGradingServer.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,6 +54,22 @@ async function startServer() {
       hasSecret,
       spreadsheetUrl: rawSpreadsheetUrl,
       spreadsheetId: rawSpreadsheetId,
+    });
+  });
+
+  // Server-side semantic essay grading using Gemini (never exposes API key to client)
+  app.post('/api/grade-essay', async (req, res) => {
+    const body = req.body as { items?: EssayGradeRequestItem[] } | null;
+    if (!body || !Array.isArray(body.items)) {
+      res.status(400).json({ ok: false, error: 'Daftar soal esai tidak ditemukan.' });
+      return;
+    }
+
+    const result = await gradeEssaysWithGemini(body.items);
+    res.status(result.httpStatus).json({
+      ok: result.ok,
+      grades: result.grades,
+      error: result.error,
     });
   });
 

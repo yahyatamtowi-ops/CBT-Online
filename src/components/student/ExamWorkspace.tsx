@@ -28,7 +28,11 @@ import type {
   Question,
   StudentAnswerValue,
 } from '../../types/cbt';
-import { playViolationAlarm } from '../../utils/audioAlert';
+import {
+  playViolationAlarm,
+  primeViolationVoice,
+  speakViolationWarning,
+} from '../../utils/audioAlert';
 import {
   evaluateCameraBehavior,
   formatSecondsToClock,
@@ -39,6 +43,13 @@ import {
 } from '../../utils/cbtLogic';
 
 type FontSizeOption = 'sm' | 'md' | 'lg';
+type CameraBehaviorStatus =
+  | 'focused'
+  | 'looking_away'
+  | 'looking_down'
+  | 'no_face'
+  | 'multiple_faces'
+  | 'talking';
 
 interface ActiveWarningModal {
   type: string;
@@ -87,9 +98,8 @@ export function ExamWorkspace({
   const [cameraState, setCameraState] = useState<
     'idle' | 'active' | 'denied' | 'disconnected'
   >(db.security.requireCameraMonitoring ? 'idle' : 'idle');
-  const [cameraBehaviorStatus, setCameraBehaviorStatus] = useState<
-    'focused' | 'looking_away' | 'talking'
-  >('focused');
+  const [cameraBehaviorStatus, setCameraBehaviorStatus] =
+    useState<CameraBehaviorStatus>('focused');
   const [micActive, setMicActive] = useState(false);
   const [audioLevelPct, setAudioLevelPct] = useState(0);
   const [cameraErrorMsg, setCameraErrorMsg] = useState<string | null>(null);
@@ -102,6 +112,8 @@ export function ExamWorkspace({
   const lastViolationAtRef = useRef<number>(0);
   const autoSubmittedRef = useRef<boolean>(false);
   const enteredFullscreenOnceRef = useRef<boolean>(false);
+  const screenshotShieldTimerRef = useRef<number | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
   const initialSizeRef = useRef<{ w: number; h: number }>({
     w: window.innerWidth,
     h: window.innerHeight,
@@ -112,9 +124,24 @@ export function ExamWorkspace({
   const proctorStreamRef = useRef<MediaStream | null>(null);
   const prevLumaRef = useRef<Uint8Array | null>(null);
   const baselineCentroidXRef = useRef<number | null>(null);
-  const calibrationSamplesRef = useRef<number[]>([]);
+  const baselineCentroidYRef = useRef<number | null>(null);
+  const baselineBalanceRef = useRef<number | null>(null);
+  const calibrationSamplesRef = useRef<Array<{ x: number; y: number; bal: number }>>([]);
   const turnFramesRef = useRef<number>(0);
+  const verticalFramesRef = useRef<number>(0);
+  const missingFaceFramesRef = useRef<number>(0);
   const speechFramesRef = useRef<number>(0);
+
+  const resetCameraCalibration = useCallback(() => {
+    baselineCentroidXRef.current = null;
+    baselineCentroidYRef.current = null;
+    baselineBalanceRef.current = null;
+    calibrationSamplesRef.current = [];
+    turnFramesRef.current = 0;
+    verticalFramesRef.current = 0;
+    missingFaceFramesRef.current = 0;
+    setCameraBehaviorStatus('focused');
+  }, []);
 
   // Sync dark mode class on <html> without clobbering global theme on unmount
   useEffect(() => {
@@ -193,16 +220,38 @@ export function ExamWorkspace({
     }
   }, [attempt.id, attempt.status, remainingSeconds, submitStudentExam]);
 
+  // Prime female TTS voice on mount and first user gesture
+  useEffect(() => {
+    primeViolationVoice();
+    const unlock = () => primeViolationVoice();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+      if (screenshotShieldTimerRef.current !== null) {
+        window.clearTimeout(screenshotShieldTimerRef.current);
+      }
+    };
+  }, []);
+
   const triggerViolation = useCallback(
     (type: string, detail: string, requiresFullscreenReturn = false) => {
       if (attempt.status !== 'in_progress') return;
       const now = Date.now();
       // Debounce duplicate simultaneous events (e.g., blur + visibilitychange)
-      if (now - lastViolationAtRef.current < 1800) return;
+      if (now - lastViolationAtRef.current < 1600) return;
       lastViolationAtRef.current = now;
 
       const result = recordStudentViolation(attempt.id, type, detail);
-      playViolationAlarm(result.locked ? 'critical' : 'warning');
+      const severity = result.locked ? 'critical' : 'warning';
+      playViolationAlarm(severity);
+      speakViolationWarning({
+        type,
+        severity,
+        count: result.nextCount,
+        maxTolerance: db.security.maxViolationTolerance,
+      });
 
       if (!result.locked) {
         setWarningModal({
@@ -216,6 +265,24 @@ export function ExamWorkspace({
       }
     },
     [attempt.id, attempt.status, db.security.maxViolationTolerance, recordStudentViolation]
+  );
+
+  const activateScreenshotShield = useCallback(
+    (type: string, detail: string) => {
+      setScreenshotShieldActive(true);
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText('').catch(() => {});
+      }
+      if (screenshotShieldTimerRef.current !== null) {
+        window.clearTimeout(screenshotShieldTimerRef.current);
+      }
+      screenshotShieldTimerRef.current = window.setTimeout(() => {
+        setScreenshotShieldActive(false);
+        screenshotShieldTimerRef.current = null;
+      }, 3600);
+      triggerViolation(type, detail);
+    },
+    [triggerViolation]
   );
 
   const requestEnterFullscreen = useCallback(async () => {
@@ -319,7 +386,139 @@ export function ExamWorkspace({
     triggerViolation,
   ]);
 
-  // Anti-Cheat Event Listeners: Right-click, Copy/Paste, Drag, DevTools, PrintScreen
+  // Anti-Cheat: Notification Bar Pull-Down (HP/Tablet) & Enhanced Screenshot Protection
+  useEffect(() => {
+    const antiNotifScreenshot = db.security.detectNotificationBarAndScreenshot !== false;
+    if (!antiNotifScreenshot || attempt.status !== 'in_progress') {
+      return;
+    }
+
+    const handleTouchStart = (e: TouchEvent) => {
+      const firstTouch = e.touches[0];
+      if (!firstTouch) return;
+      // Top-edge swipe down (notification bar / control center zone on phones & tablets)
+      if (firstTouch.clientY <= 44) {
+        touchStartYRef.current = firstTouch.clientY;
+      } else {
+        touchStartYRef.current = null;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (touchStartYRef.current === null) return;
+      const touch = e.touches[0];
+      if (!touch) return;
+      if (touch.clientY - touchStartYRef.current >= 24) {
+        e.preventDefault();
+        touchStartYRef.current = null;
+        triggerViolation(
+          'Membuka Bilah Notifikasi (HP/Tablet)',
+          'Terdeteksi gestur menarik bilah notifikasi dari bagian atas layar saat ujian berlangsung.'
+        );
+      }
+    };
+
+    const handleTouchEnd = () => {
+      touchStartYRef.current = null;
+    };
+
+    // Detect OS notification shade / snipping overlay via focus polling & visualViewport
+    let wasFocused = document.hasFocus();
+    const focusPoll = window.setInterval(() => {
+      const nowFocused = document.hasFocus();
+      if (wasFocused && !nowFocused && !document.hidden) {
+        triggerViolation(
+          'Membuka Bilah Notifikasi / Overlay Sistem',
+          'Fokus layar ujian terganggu oleh bilah notifikasi atau panel sistem pada perangkat.'
+        );
+      }
+      wasFocused = nowFocused;
+    }, 700);
+
+    const vv = window.visualViewport;
+    const handleVisualViewportChange = () => {
+      if (!vv) return;
+      const activeTag = document.activeElement?.tagName;
+      const typingInInput = activeTag === 'TEXTAREA' || activeTag === 'INPUT';
+      if (vv.offsetTop > 18 && !typingInInput) {
+        triggerViolation(
+          'Membuka Bilah Notifikasi / Perubahan Viewport',
+          'Terdeteksi pergeseran bilah atas sistem atau overlay notifikasi pada perangkat.'
+        );
+      }
+    };
+
+    const isScreenshotCombo = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      const code = e.code || '';
+      const isPrintScreen =
+        e.key === 'PrintScreen' ||
+        code === 'PrintScreen' ||
+        e.keyCode === 44 ||
+        e.key === 'F13';
+      const isWinSnip = (e.metaKey || e.ctrlKey) && e.shiftKey && key === 's';
+      const isMacShot =
+        e.metaKey && e.shiftKey && ['3', '4', '5', '6'].includes(key);
+      const isPrintCombo = (e.ctrlKey || e.metaKey) && key === 'p';
+      return isPrintScreen || isWinSnip || isMacShot || isPrintCombo;
+    };
+
+    const handleScreenshotKeyDown = (e: KeyboardEvent) => {
+      if (isScreenshotCombo(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        activateScreenshotShield(
+          'Percobaan Screenshot / Tangkapan Layar',
+          `Kombinasi tombol tangkapan layar (${e.key}) terdeteksi. Layar ujian langsung dikunci dengan tirai hitam.`
+        );
+      }
+    };
+
+    const handleScreenshotKeyUp = (e: KeyboardEvent) => {
+      if (isScreenshotCombo(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        activateScreenshotShield(
+          'Percobaan Screenshot / Tangkapan Layar',
+          `Tangkapan layar (${e.key}) diblokir dan dicatat sebagai pelanggaran.`
+        );
+      }
+    };
+
+    const handleBeforePrint = (e: Event) => {
+      e.preventDefault();
+      activateScreenshotShield(
+        'Percobaan Cetak / Screenshot Layar',
+        'Perintah cetak layar/PDF diblokir selama ujian berlangsung.'
+      );
+    };
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+    window.addEventListener('touchend', handleTouchEnd, { passive: true });
+    window.addEventListener('keydown', handleScreenshotKeyDown, { capture: true });
+    window.addEventListener('keyup', handleScreenshotKeyUp, { capture: true });
+    window.addEventListener('beforeprint', handleBeforePrint);
+    vv?.addEventListener('resize', handleVisualViewportChange);
+
+    return () => {
+      window.clearInterval(focusPoll);
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+      window.removeEventListener('keydown', handleScreenshotKeyDown, { capture: true });
+      window.removeEventListener('keyup', handleScreenshotKeyUp, { capture: true });
+      window.removeEventListener('beforeprint', handleBeforePrint);
+      vv?.removeEventListener('resize', handleVisualViewportChange);
+    };
+  }, [
+    activateScreenshotShield,
+    attempt.status,
+    db.security.detectNotificationBarAndScreenshot,
+    triggerViolation,
+  ]);
+
+  // Anti-Cheat Event Listeners: Right-click, Copy/Paste, Drag, DevTools
   useEffect(() => {
     if (!db.security.blockRightClickAndCopyPaste || attempt.status !== 'in_progress') {
       return;
@@ -332,25 +531,17 @@ export function ExamWorkspace({
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       const ctrlOrMeta = e.ctrlKey || e.metaKey;
-
-      if (e.key === 'PrintScreen') {
-        e.preventDefault();
-        setScreenshotShieldActive(true);
-        triggerViolation(
-          'Percobaan Screenshot (PrintScreen)',
-          'Tombol PrintScreen ditekan. Layar soal diburamkan otomatis.'
-        );
-        setTimeout(() => setScreenshotShieldActive(false), 3500);
-        return;
-      }
+      const targetTag = (e.target as HTMLElement | null)?.tagName;
+      const isEditingEssay = targetTag === 'TEXTAREA' || targetTag === 'INPUT';
 
       const isDevTools =
         e.key === 'F12' ||
         (ctrlOrMeta && e.shiftKey && ['i', 'j', 'c'].includes(key));
 
-      const isBlockedShortcut =
-        ctrlOrMeta && ['c', 'v', 'x', 'a', 'p', 's', 'u'].includes(key);
-
+      const blockedKeys = isEditingEssay
+        ? ['c', 'v', 'x', 'p', 's', 'u']
+        : ['c', 'v', 'x', 'a', 'p', 's', 'u'];
+      const isBlockedShortcut = ctrlOrMeta && blockedKeys.includes(key);
       const isAltTab = e.altKey && key === 'tab';
 
       if (isDevTools || isBlockedShortcut || isAltTab) {
@@ -364,24 +555,12 @@ export function ExamWorkspace({
       }
     };
 
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'PrintScreen') {
-        setScreenshotShieldActive(true);
-        triggerViolation(
-          'Percobaan Screenshot (PrintScreen)',
-          'Tombol tangkapan layar terdeteksi.'
-        );
-        setTimeout(() => setScreenshotShieldActive(false), 3500);
-      }
-    };
-
     document.addEventListener('contextmenu', blockEvent);
     document.addEventListener('copy', blockEvent);
     document.addEventListener('cut', blockEvent);
     document.addEventListener('paste', blockEvent);
     document.addEventListener('dragstart', blockEvent);
     document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('keyup', handleKeyUp);
 
     return () => {
       document.removeEventListener('contextmenu', blockEvent);
@@ -390,11 +569,10 @@ export function ExamWorkspace({
       document.removeEventListener('paste', blockEvent);
       document.removeEventListener('dragstart', blockEvent);
       document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('keyup', handleKeyUp);
     };
   }, [attempt.status, db.security.blockRightClickAndCopyPaste, triggerViolation]);
 
-  // Camera & Audio Proctoring: detect looking left/right, talking, or disconnecting camera
+  // Camera & Audio Proctoring: calibrated face bounding-box, gaze yaw/pitch, missing/multiple face & speech tracking
   useEffect(() => {
     if (!db.security.requireCameraMonitoring || attempt.status !== 'in_progress') {
       return;
@@ -405,15 +583,43 @@ export function ExamWorkspace({
     let audioCtx: AudioContext | null = null;
     let analyser: AnalyserNode | null = null;
     let audioBuffer: Float32Array<ArrayBuffer> | null = null;
+    const W = 96;
+    const H = 72;
     const offscreen = document.createElement('canvas');
-    offscreen.width = 64;
-    offscreen.height = 48;
+    offscreen.width = W;
+    offscreen.height = H;
     const ctx2d = offscreen.getContext('2d', { willReadFrequently: true });
+
+    // Optional native Chrome/Edge FaceDetector API for precise bounding box & landmark yaw
+    type DetectedFaceLike = {
+      boundingBox: { x: number; y: number; width: number; height: number };
+      landmarks?: Array<{ type?: string; locations?: Array<{ x: number; y: number }> }>;
+    };
+    type FaceDetectorLike = {
+      detect: (src: CanvasImageSource) => Promise<DetectedFaceLike[]>;
+    };
+    const FaceDetectorCtor = (
+      window as unknown as {
+        FaceDetector?: new (opts?: { fastMode?: boolean; maxDetectedFaces?: number }) => FaceDetectorLike;
+      }
+    ).FaceDetector;
+    let nativeDetector: FaceDetectorLike | null = null;
+    if (typeof FaceDetectorCtor === 'function') {
+      try {
+        nativeDetector = new FaceDetectorCtor({ fastMode: true, maxDetectedFaces: 3 });
+      } catch {
+        nativeDetector = null;
+      }
+    }
 
     prevLumaRef.current = null;
     baselineCentroidXRef.current = null;
+    baselineCentroidYRef.current = null;
+    baselineBalanceRef.current = null;
     calibrationSamplesRef.current = [];
     turnFramesRef.current = 0;
+    verticalFramesRef.current = 0;
+    missingFaceFramesRef.current = 0;
     speechFramesRef.current = 0;
 
     const cleanupMedia = () => {
@@ -500,111 +706,236 @@ export function ExamWorkspace({
           }
         }
 
-        monitorInterval = window.setInterval(() => {
-          if (cancelled) return;
-          const videoEl = proctorVideoRef.current;
+        let processingFrame = false;
+        monitorInterval = window.setInterval(async () => {
+          if (cancelled || processingFrame) return;
+          processingFrame = true;
+          try {
+            const videoEl = proctorVideoRef.current;
 
-          let horizontalShift = 0;
-          let lateralMotionScore = 0;
+            let horizontalShift = 0;
+            let verticalShift = 0;
+            let lateralMotionScore = 0;
+            let eyeYawScore = 0;
+            let faceDetected = true;
+            let faceCount = 1;
 
-          if (videoEl && videoEl.readyState >= 2 && ctx2d) {
-            ctx2d.drawImage(videoEl, 0, 0, 64, 48);
-            const imgData = ctx2d.getImageData(0, 0, 64, 48).data;
-            const currentLuma = new Uint8Array(64 * 48);
+            if (videoEl && videoEl.readyState >= 2 && ctx2d) {
+              ctx2d.drawImage(videoEl, 0, 0, W, H);
+              const imgData = ctx2d.getImageData(0, 0, W, H).data;
+              const currentLuma = new Uint8Array(W * H);
 
-            let weightedX = 0;
-            let weightTotal = 0;
-            let leftDiff = 0;
-            let rightDiff = 0;
-            let regionPixels = 0;
+              let skinCount = 0;
+              let sumSkinX = 0;
+              let sumSkinY = 0;
+              let minSkinX = W;
+              let maxSkinX = 0;
+              let leftDiff = 0;
+              let rightDiff = 0;
+              let regionPixels = 0;
+              let leftHalfSkin = 0;
+              let rightHalfSkin = 0;
+              const skinMask = new Uint8Array(W * H);
 
-            for (let y = 6; y < 42; y++) {
-              for (let x = 6; x < 58; x++) {
-                const pIdx = y * 64 + x;
-                const dIdx = pIdx * 4;
-                const r = imgData[dIdx];
-                const g = imgData[dIdx + 1];
-                const b = imgData[dIdx + 2];
-                const luma = (r * 77 + g * 150 + b * 29) >> 8;
-                currentLuma[pIdx] = luma;
+              for (let y = 4; y < H - 4; y++) {
+                for (let x = 6; x < W - 6; x++) {
+                  const pIdx = y * W + x;
+                  const dIdx = pIdx * 4;
+                  const r = imgData[dIdx];
+                  const g = imgData[dIdx + 1];
+                  const b = imgData[dIdx + 2];
+                  const luma = (r * 77 + g * 150 + b * 29) >> 8;
+                  currentLuma[pIdx] = luma;
 
-                // Skin-tone / illuminated foreground weighting for horizontal face centroid
-                const isSkinLike = r > 70 && g > 35 && b > 20 && r > g && r > b;
-                const weight = isSkinLike ? 3 : luma > 85 ? 1 : 0;
-                if (weight > 0) {
-                  const normX = (x - 32) / 26; // -1 .. +1
-                  weightedX += normX * weight;
-                  weightTotal += weight;
-                }
+                  // YCbCr skin-tone segmentation (robust across lighting & skin tones)
+                  const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+                  const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+                  const isSkin =
+                    luma > 35 &&
+                    cb >= 77 &&
+                    cb <= 127 &&
+                    cr >= 132 &&
+                    cr <= 174;
 
-                if (prevLumaRef.current) {
-                  const diff = Math.abs(luma - prevLumaRef.current[pIdx]);
-                  if (diff > 24) {
-                    if (x < 32) leftDiff += 1;
-                    else rightDiff += 1;
+                  if (isSkin) {
+                    skinMask[pIdx] = 1;
+                    skinCount += 1;
+                    sumSkinX += x;
+                    sumSkinY += y;
+                    if (x < minSkinX) minSkinX = x;
+                    if (x > maxSkinX) maxSkinX = x;
                   }
-                  regionPixels += 1;
+
+                  if (prevLumaRef.current) {
+                    const diff = Math.abs(luma - prevLumaRef.current[pIdx]);
+                    if (diff > 20) {
+                      if (x < W / 2) leftDiff += 1;
+                      else rightDiff += 1;
+                    }
+                    regionPixels += 1;
+                  }
                 }
+              }
+
+              prevLumaRef.current = currentLuma;
+
+              let cxNorm: number | null = null;
+              let cyNorm: number | null = null;
+              let balanceNorm = 0;
+
+              // Prefer native FaceDetector when supported by browser
+              let usedNative = false;
+              if (nativeDetector) {
+                try {
+                  const faces = await nativeDetector.detect(offscreen);
+                  usedNative = true;
+                  faceCount = faces.length;
+                  faceDetected = faces.length > 0;
+                  if (faces.length > 0) {
+                    const primary = faces[0].boundingBox;
+                    const faceCenterX = primary.x + primary.width / 2;
+                    const faceCenterY = primary.y + primary.height / 2;
+                    cxNorm = (faceCenterX - W / 2) / (W * 0.42);
+                    cyNorm = (faceCenterY - H / 2) / (H * 0.42);
+
+                    // Compute left/right cheek skin balance inside native face box
+                    for (
+                      let y = Math.max(0, Math.floor(primary.y));
+                      y < Math.min(H, Math.ceil(primary.y + primary.height));
+                      y++
+                    ) {
+                      for (
+                        let x = Math.max(0, Math.floor(primary.x));
+                        x < Math.min(W, Math.ceil(primary.x + primary.width));
+                        x++
+                      ) {
+                        if (skinMask[y * W + x]) {
+                          if (x < faceCenterX) leftHalfSkin += 1;
+                          else rightHalfSkin += 1;
+                        }
+                      }
+                    }
+                    const boxSkinTotal = leftHalfSkin + rightHalfSkin;
+                    if (boxSkinTotal > 12) {
+                      balanceNorm = (rightHalfSkin - leftHalfSkin) / boxSkinTotal;
+                    }
+                  }
+                } catch {
+                  usedNative = false;
+                }
+              }
+
+              if (!usedNative) {
+                faceDetected = skinCount >= 24;
+                faceCount = faceDetected ? 1 : 0;
+                if (faceDetected) {
+                  const avgX = sumSkinX / skinCount;
+                  const avgY = sumSkinY / skinCount;
+                  cxNorm = (avgX - W / 2) / (W * 0.4);
+                  cyNorm = (avgY - H / 2) / (H * 0.4);
+
+                  // Measure skin distribution left vs right of face center to detect in-place head yaw
+                  const boxMid = (minSkinX + maxSkinX) / 2;
+                  for (let y = 4; y < H - 4; y++) {
+                    for (let x = minSkinX; x <= maxSkinX; x++) {
+                      if (skinMask[y * W + x]) {
+                        if (x < boxMid) leftHalfSkin += 1;
+                        else rightHalfSkin += 1;
+                      }
+                    }
+                  }
+                  const totalBoxSkin = leftHalfSkin + rightHalfSkin;
+                  if (totalBoxSkin > 20) {
+                    balanceNorm = (rightHalfSkin - leftHalfSkin) / totalBoxSkin;
+                  }
+                }
+              }
+
+              if (faceDetected && cxNorm !== null && cyNorm !== null) {
+                if (
+                  baselineCentroidXRef.current === null ||
+                  baselineCentroidYRef.current === null ||
+                  baselineBalanceRef.current === null
+                ) {
+                  calibrationSamplesRef.current.push({
+                    x: cxNorm,
+                    y: cyNorm,
+                    bal: balanceNorm,
+                  });
+                  if (calibrationSamplesRef.current.length >= 3) {
+                    const n = calibrationSamplesRef.current.length;
+                    baselineCentroidXRef.current =
+                      calibrationSamplesRef.current.reduce((s, p) => s + p.x, 0) / n;
+                    baselineCentroidYRef.current =
+                      calibrationSamplesRef.current.reduce((s, p) => s + p.y, 0) / n;
+                    baselineBalanceRef.current =
+                      calibrationSamplesRef.current.reduce((s, p) => s + p.bal, 0) / n;
+                  }
+                } else {
+                  horizontalShift = Math.max(
+                    -1,
+                    Math.min(1, cxNorm - baselineCentroidXRef.current)
+                  );
+                  verticalShift = Math.max(
+                    -1,
+                    Math.min(1, cyNorm - baselineCentroidYRef.current)
+                  );
+                  eyeYawScore = Math.max(
+                    -1,
+                    Math.min(1, balanceNorm - baselineBalanceRef.current)
+                  );
+                }
+              }
+
+              if (regionPixels > 0) {
+                const totalMoved = leftDiff + rightDiff;
+                const asymmetry = Math.abs(leftDiff - rightDiff) / (regionPixels * 0.42);
+                lateralMotionScore = totalMoved > 55 ? Math.min(1, asymmetry * 1.55) : 0;
               }
             }
 
-            prevLumaRef.current = currentLuma;
-
-            if (weightTotal > 20) {
-              const centroidX = weightedX / weightTotal;
-              if (baselineCentroidXRef.current === null) {
-                calibrationSamplesRef.current.push(centroidX);
-                if (calibrationSamplesRef.current.length >= 3) {
-                  const sum = calibrationSamplesRef.current.reduce((a, b) => a + b, 0);
-                  baselineCentroidXRef.current = sum / calibrationSamplesRef.current.length;
-                }
-              } else {
-                horizontalShift = Math.max(
-                  -1,
-                  Math.min(1, centroidX - baselineCentroidXRef.current)
-                );
+            let audioRms = 0;
+            if (analyser && audioBuffer) {
+              analyser.getFloatTimeDomainData(audioBuffer);
+              let sumSq = 0;
+              for (let i = 0; i < audioBuffer.length; i++) {
+                sumSq += audioBuffer[i] * audioBuffer[i];
               }
+              audioRms = Math.sqrt(sumSq / audioBuffer.length);
+              setAudioLevelPct(Math.min(100, Math.round(audioRms * 450)));
             }
 
-            if (regionPixels > 0) {
-              // Lateral asymmetry score indicates sudden turning to left or right side
-              const totalMoved = leftDiff + rightDiff;
-              const asymmetry = Math.abs(leftDiff - rightDiff) / (regionPixels * 0.5);
-              lateralMotionScore = totalMoved > 60 ? Math.min(1, asymmetry * 1.4) : 0;
+            const evaluation = evaluateCameraBehavior({
+              horizontalShift,
+              verticalShift,
+              lateralMotionScore,
+              eyeYawScore,
+              faceDetected,
+              faceCount,
+              audioRms,
+              consecutiveTurnFrames: turnFramesRef.current,
+              consecutiveSpeechFrames: speechFramesRef.current,
+              consecutiveMissingFaceFrames: missingFaceFramesRef.current,
+              consecutiveVerticalFrames: verticalFramesRef.current,
+            });
+
+            turnFramesRef.current = evaluation.nextTurnFrames;
+            speechFramesRef.current = evaluation.nextSpeechFrames;
+            missingFaceFramesRef.current = evaluation.nextMissingFaceFrames;
+            verticalFramesRef.current = evaluation.nextVerticalFrames;
+            setCameraBehaviorStatus(evaluation.status);
+
+            if (
+              evaluation.shouldFlagViolation &&
+              evaluation.violationType &&
+              evaluation.violationDetail
+            ) {
+              triggerViolation(evaluation.violationType, evaluation.violationDetail);
             }
+          } finally {
+            processingFrame = false;
           }
-
-          let audioRms = 0;
-          if (analyser && audioBuffer) {
-            analyser.getFloatTimeDomainData(audioBuffer);
-            let sumSq = 0;
-            for (let i = 0; i < audioBuffer.length; i++) {
-              sumSq += audioBuffer[i] * audioBuffer[i];
-            }
-            audioRms = Math.sqrt(sumSq / audioBuffer.length);
-            setAudioLevelPct(Math.min(100, Math.round(audioRms * 450)));
-          }
-
-          const evaluation = evaluateCameraBehavior({
-            horizontalShift,
-            lateralMotionScore,
-            audioRms,
-            consecutiveTurnFrames: turnFramesRef.current,
-            consecutiveSpeechFrames: speechFramesRef.current,
-          });
-
-          turnFramesRef.current = evaluation.nextTurnFrames;
-          speechFramesRef.current = evaluation.nextSpeechFrames;
-          setCameraBehaviorStatus(evaluation.status);
-
-          if (
-            evaluation.shouldFlagViolation &&
-            evaluation.violationType &&
-            evaluation.violationDetail
-          ) {
-            triggerViolation(evaluation.violationType, evaluation.violationDetail);
-          }
-        }, 750);
+        }, 550);
       } catch {
         if (!cancelled) {
           setCameraState('denied');
@@ -711,9 +1042,25 @@ export function ExamWorkspace({
   const currentAnswer = attempt.answers[currentQuestion.id];
   const isCurrentFlagged = attempt.flaggedQuestionIds.includes(currentQuestion.id);
 
+  const cameraStatusLabel =
+    cameraState !== 'active'
+      ? 'Kamera Nonaktif'
+      : cameraBehaviorStatus === 'multiple_faces'
+        ? '>1 Wajah!'
+        : cameraBehaviorStatus === 'no_face'
+          ? 'Wajah Hilang!'
+          : cameraBehaviorStatus === 'looking_down'
+            ? 'Menunduk!'
+            : cameraBehaviorStatus === 'talking'
+              ? 'Suara Terdeteksi'
+              : cameraBehaviorStatus === 'looking_away'
+                ? 'Menoleh!'
+                : 'Wajah Fokus';
+
   return (
     <div
-      className={`min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 flex flex-col exam-print-shield ${
+      data-testid="exam-workspace-root"
+      className={`min-h-dvh md:h-dvh md:overflow-hidden bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 flex flex-col exam-print-shield ${
         db.security.blockRightClickAndCopyPaste ? 'exam-no-select' : ''
       }`}
     >
@@ -721,7 +1068,7 @@ export function ExamWorkspace({
       {!isOnline && (
         <div
           role="alert"
-          className="bg-amber-600 text-white px-4 py-2.5 text-center text-xs font-semibold flex items-center justify-center gap-2"
+          className="shrink-0 bg-amber-600 text-white px-4 py-2 text-center text-xs font-semibold flex items-center justify-center gap-2"
         >
           <WifiOff className="h-4 w-4 shrink-0" />
           <span>
@@ -730,11 +1077,11 @@ export function ExamWorkspace({
         </div>
       )}
 
-      {/* Compact Sticky Exam Top Bar */}
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
+      {/* Compact Exam Top Bar */}
+      <header className="sticky top-0 md:static shrink-0 z-30 border-b border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-2 sm:px-5">
           <div className="min-w-0">
-            <div className="text-xs font-semibold text-indigo-700 dark:text-indigo-400 truncate">
+            <div className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-400 truncate">
               {examPackage.subject} · {attempt.studentName} ({attempt.studentNisn})
             </div>
             <div className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
@@ -742,16 +1089,16 @@ export function ExamWorkspace({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
             {/* Compact Camera Proctoring Status */}
             {db.security.requireCameraMonitoring && (
               <div
-                className={`hidden md:inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold ${
+                className={`hidden md:inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold ${
                   cameraState !== 'active'
                     ? 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
                     : cameraBehaviorStatus === 'focused'
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
-                    : 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
+                      : 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
                 }`}
               >
                 {cameraState === 'active' ? (
@@ -759,28 +1106,20 @@ export function ExamWorkspace({
                 ) : (
                   <CameraOff className="h-3.5 w-3.5" />
                 )}
-                <span>
-                  {cameraState !== 'active'
-                    ? 'Kamera Nonaktif'
-                    : cameraBehaviorStatus === 'talking'
-                    ? 'Suara Terdeteksi'
-                    : cameraBehaviorStatus === 'looking_away'
-                    ? 'Menoleh Terdeteksi'
-                    : 'Kamera Aktif'}
-                </span>
+                <span>{cameraStatusLabel}</span>
               </div>
             )}
 
             {/* Timer */}
             <div
-              className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-sm font-bold tabular-nums ${
+              className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-sm font-bold tabular-nums ${
                 remainingSeconds <= 300
                   ? 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
                   : 'border-slate-200 bg-slate-50 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
               }`}
               aria-label="Sisa waktu ujian"
             >
-              <Clock className="h-4 w-4" />
+              <Clock className="h-3.5 w-3.5" />
               <span>{formatSecondsToClock(remainingSeconds)}</span>
             </div>
 
@@ -795,7 +1134,7 @@ export function ExamWorkspace({
                   key={sz}
                   type="button"
                   onClick={() => setFontSize(sz)}
-                  className={`rounded-md px-2 py-1 text-xs font-bold uppercase transition-colors ${
+                  className={`rounded-md px-2 py-0.5 text-xs font-bold uppercase transition-colors ${
                     fontSize === sz
                       ? 'bg-white text-indigo-700 shadow-xs dark:bg-slate-700 dark:text-indigo-300'
                       : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
@@ -811,17 +1150,17 @@ export function ExamWorkspace({
               type="button"
               onClick={() => setDarkMode((d) => !d)}
               aria-label={darkMode ? 'Aktifkan mode terang' : 'Aktifkan mode gelap'}
-              className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+              className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
             >
               {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
 
-            {/* Mobile Question Map Trigger */}
+            {/* Mobile Question Map Trigger (< md) */}
             <button
               type="button"
               onClick={() => setMobileNavOpen(true)}
               aria-label="Buka peta nomor soal"
-              className="lg:hidden inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              className="md:hidden inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
             >
               <LayoutGrid className="h-4 w-4" />
               <span className="font-mono tabular-nums">
@@ -832,11 +1171,11 @@ export function ExamWorkspace({
         </div>
       </header>
 
-      {/* Main Two-Column Exam Layout */}
-      <main className="relative mx-auto w-full max-w-7xl flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 px-4 py-6 sm:px-6">
+      {/* Main Viewport-Fitted Two-Column Exam Layout (Tablet & Desktop fit 100% screen height) */}
+      <main className="relative mx-auto w-full max-w-7xl flex-1 md:min-h-0 md:overflow-hidden grid grid-cols-1 md:grid-cols-12 gap-3.5 px-4 py-3 sm:px-5">
         {/* Question Area (Protected with Dynamic Watermark) */}
         <section
-          className={`relative lg:col-span-8 xl:col-span-9 rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 p-5 sm:p-8 overflow-hidden flex flex-col justify-between min-h-[540px] ${
+          className={`relative md:col-span-8 xl:col-span-9 md:h-full md:min-h-0 rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 p-4 sm:p-5 overflow-hidden flex flex-col ${
             screenshotShieldActive ? 'blur-xl brightness-0' : ''
           }`}
         >
@@ -860,70 +1199,72 @@ export function ExamWorkspace({
             </div>
           )}
 
-          {/* Question Content */}
-          <div className="relative z-20 space-y-6">
-            {/* Header Bar */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
-              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                <span className="font-mono text-sm font-bold text-slate-900 dark:text-slate-100">
-                  Soal {currentIndex + 1} dari {orderedQuestions.length}
-                </span>
-                <span>·</span>
-                <span className="font-semibold text-indigo-700 dark:text-indigo-400">
-                  {currentQuestion.type === 'single_choice'
-                    ? 'Pilihan Ganda'
-                    : currentQuestion.type === 'multiple_choice'
+          {/* Header Bar (Pinned inside Question Card) */}
+          <div className="relative z-20 shrink-0 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-2.5">
+            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span className="font-mono text-sm font-bold text-slate-900 dark:text-slate-100">
+                Soal {currentIndex + 1} dari {orderedQuestions.length}
+              </span>
+              <span>·</span>
+              <span className="font-semibold text-indigo-700 dark:text-indigo-400">
+                {currentQuestion.type === 'single_choice'
+                  ? 'Pilihan Ganda'
+                  : currentQuestion.type === 'multiple_choice'
                     ? 'Pilihan Ganda Kompleks'
                     : currentQuestion.type === 'matching'
-                    ? 'Menjodohkan'
-                    : 'Benar / Salah'}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-3 text-xs">
-                <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-medium">
-                  {isOnline ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5 text-amber-600" />}
-                  <Save className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">{lastSavedText}</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => toggleFlagQuestion(attempt.id, currentQuestion.id)}
-                  className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                    isCurrentFlagged
-                      ? 'border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-600 dark:bg-amber-950/60 dark:text-amber-300'
-                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
-                  }`}
-                >
-                  <Flag className="h-3.5 w-3.5" />
-                  <span>{isCurrentFlagged ? 'Ditandai Ragu-ragu' : 'Tandai Ragu-ragu'}</span>
-                </button>
-              </div>
+                      ? 'Menjodohkan'
+                      : currentQuestion.type === 'essay'
+                        ? 'Soal Esai (Koreksi Otomatis)'
+                        : 'Benar / Salah'}
+              </span>
             </div>
 
+            <div className="flex items-center gap-2.5 text-xs">
+              <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-medium">
+                {isOnline ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5 text-amber-600" />}
+                <Save className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{lastSavedText}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => toggleFlagQuestion(attempt.id, currentQuestion.id)}
+                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                  isCurrentFlagged
+                    ? 'border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-600 dark:bg-amber-950/60 dark:text-amber-300'
+                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                }`}
+              >
+                <Flag className="h-3.5 w-3.5" />
+                <span>{isCurrentFlagged ? 'Ragu-ragu' : 'Tandai Ragu'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Scrollable Question Body (scrolls internally only if a question is unusually tall) */}
+          <div className="relative z-20 flex-1 min-h-0 overflow-y-auto py-3 pr-1 space-y-3">
             {/* Prompt & Optional Diagram */}
-            <div className="space-y-4">
+            <div className="space-y-3">
               <p className={`${fontSizeClass} font-medium text-slate-900 dark:text-slate-100`}>
                 {currentQuestion.prompt}
               </p>
 
               {currentQuestion.imageUrl && (
-                <div className="max-w-md rounded-xl border border-slate-200 dark:border-slate-700 bg-white p-3">
+                <div className="max-w-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white p-2">
                   <img
                     src={currentQuestion.imageUrl}
                     alt={`Diagram soal nomor ${currentIndex + 1}`}
                     referrerPolicy="no-referrer"
-                    className="max-h-64 w-full object-contain rounded"
+                    className="max-h-44 w-full object-contain rounded"
                   />
                 </div>
               )}
             </div>
 
             {/* Answer Controls by Question Type */}
-            <div className="pt-2 space-y-3">
+            <div className="pt-1 space-y-2">
               {/* SINGLE CHOICE */}
               {currentQuestion.type === 'single_choice' && (
-                <div className="space-y-2.5" role="radiogroup" aria-label="Pilihan jawaban">
+                <div className="space-y-2" role="radiogroup" aria-label="Pilihan jawaban">
                   {currentOptions.map((opt, displayIdx) => {
                     const displayLetter = String.fromCharCode(65 + displayIdx);
                     const selected = currentAnswer === opt.id;
@@ -934,14 +1275,14 @@ export function ExamWorkspace({
                         role="radio"
                         aria-checked={selected}
                         onClick={() => handleAnswerChange(currentQuestion.id, opt.id)}
-                        className={`flex w-full items-start gap-3.5 rounded-xl border p-4 text-left transition-colors ${
+                        className={`flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors ${
                           selected
                             ? 'border-indigo-600 bg-indigo-50/80 text-indigo-950 dark:border-indigo-500 dark:bg-indigo-950/50 dark:text-indigo-100'
                             : 'border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200 dark:hover:bg-slate-800'
                         }`}
                       >
                         <span
-                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border font-mono text-xs font-bold ${
+                          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border font-mono text-xs font-bold ${
                             selected
                               ? 'border-indigo-600 bg-indigo-600 text-white'
                               : 'border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300'
@@ -949,7 +1290,7 @@ export function ExamWorkspace({
                         >
                           {displayLetter}
                         </span>
-                        <span className={`${fontSizeClass} pt-0.5`}>{opt.text}</span>
+                        <span className={`${fontSizeClass} leading-snug`}>{opt.text}</span>
                       </button>
                     );
                   })}
@@ -958,7 +1299,7 @@ export function ExamWorkspace({
 
               {/* MULTIPLE CHOICE (KOMPLEKS) */}
               {currentQuestion.type === 'multiple_choice' && (
-                <div className="space-y-2.5">
+                <div className="space-y-2">
                   <p className="text-xs font-medium text-indigo-700 dark:text-indigo-400">
                     Pilih lebih dari satu jawaban yang menurut Anda benar:
                   </p>
@@ -978,14 +1319,14 @@ export function ExamWorkspace({
                             : [...selectedList, opt.id];
                           handleAnswerChange(currentQuestion.id, next);
                         }}
-                        className={`flex w-full items-start gap-3.5 rounded-xl border p-4 text-left transition-colors ${
+                        className={`flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors ${
                           checked
                             ? 'border-indigo-600 bg-indigo-50/80 text-indigo-950 dark:border-indigo-500 dark:bg-indigo-950/50 dark:text-indigo-100'
                             : 'border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200 dark:hover:bg-slate-800'
                         }`}
                       >
                         <span
-                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border font-mono text-xs font-bold ${
+                          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border font-mono text-xs font-bold ${
                             checked
                               ? 'border-indigo-600 bg-indigo-600 text-white'
                               : 'border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300'
@@ -993,7 +1334,7 @@ export function ExamWorkspace({
                         >
                           {checked ? '✓' : displayLetter}
                         </span>
-                        <span className={`${fontSizeClass} pt-0.5`}>{opt.text}</span>
+                        <span className={`${fontSizeClass} leading-snug`}>{opt.text}</span>
                       </button>
                     );
                   })}
@@ -1073,16 +1414,48 @@ export function ExamWorkspace({
                   })}
                 </div>
               )}
+              {/* ESSAY (SOAL ESAI KOREKSI SEMANTIK OTOMATIS) */}
+              {currentQuestion.type === 'essay' && (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <label
+                      htmlFor={`essay-input-${currentQuestion.id}`}
+                      className="font-semibold text-indigo-700 dark:text-indigo-400"
+                    >
+                      Tuliskan jawaban uraian Anda dengan bahasa sendiri yang jelas dan lengkap:
+                    </label>
+                    <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+                      {typeof currentAnswer === 'string' && currentAnswer.trim()
+                        ? `${currentAnswer.trim().split(/\s+/).length} kata`
+                        : '0 kata'}
+                    </span>
+                  </div>
+                  <textarea
+                    id={`essay-input-${currentQuestion.id}`}
+                    data-testid="essay-answer-input"
+                    rows={5}
+                    value={typeof currentAnswer === 'string' ? currentAnswer : ''}
+                    onChange={(e) =>
+                      handleAnswerChange(currentQuestion.id, e.target.value)
+                    }
+                    placeholder="Ketik jawaban esai Anda di sini... Sistem akan mengoreksi otomatis berdasarkan ketepatan makna jawaban."
+                    className={`w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800/80 p-3.5 text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20 focus:outline-none resize-none ${fontSizeClass}`}
+                  />
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Jawaban esai tersimpan otomatis dan dikoreksi berdasarkan kesesuaian makna serta konsep kunci (bobot maks. {currentQuestion.points} poin).
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Bottom Prev / Next Controls */}
-          <div className="relative z-20 mt-8 flex items-center justify-between gap-3 border-t border-slate-100 dark:border-slate-800 pt-5">
+          {/* Bottom Prev / Next Controls (Always Visible at Bottom of Screen on Tablet/Desktop) */}
+          <div className="relative z-20 shrink-0 mt-2 flex items-center justify-between gap-3 border-t border-slate-100 dark:border-slate-800 pt-3">
             <button
               type="button"
               disabled={currentIndex === 0}
               onClick={() => handleSelectQuestion(currentIndex - 1)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 disabled:opacity-40 whitespace-nowrap"
             >
               <ChevronLeft className="h-4 w-4" />
               <span>Soal Sebelumnya</span>
@@ -1092,7 +1465,7 @@ export function ExamWorkspace({
               <button
                 type="button"
                 onClick={() => handleSelectQuestion(currentIndex + 1)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-5 py-2.5 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
               >
                 <span>Soal Berikutnya</span>
                 <ChevronRight className="h-4 w-4" />
@@ -1104,7 +1477,7 @@ export function ExamWorkspace({
                   setConfirmChecked(false);
                   setShowSubmitModal(true);
                 }}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-5 py-2.5 text-xs font-semibold text-white hover:bg-emerald-700 whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 whitespace-nowrap"
               >
                 <CheckCircle2 className="h-4 w-4" />
                 <span>Selesaikan Ujian</span>
@@ -1113,11 +1486,11 @@ export function ExamWorkspace({
           </div>
         </section>
 
-        {/* Desktop Question Navigator & Status Sidebar */}
-        <aside className="hidden lg:flex lg:col-span-4 xl:col-span-3 flex-col gap-4">
-          <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+        {/* Tablet & Desktop Question Navigator + Camera/Integrity Sidebar (Viewport-Fitted) */}
+        <aside className="hidden md:flex md:col-span-4 xl:col-span-3 md:h-full md:min-h-0 flex-col gap-3 overflow-hidden">
+          <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 p-3.5 flex-1 min-h-0 flex flex-col gap-2.5">
+            <div className="flex items-center justify-between shrink-0">
+              <h2 className="text-xs font-bold text-slate-900 dark:text-slate-100">
                 Peta Navigasi Soal
               </h2>
               <span className="font-mono text-xs text-slate-500 dark:text-slate-400 tabular-nums">
@@ -1125,7 +1498,7 @@ export function ExamWorkspace({
               </span>
             </div>
 
-            <div className="grid grid-cols-5 gap-2">
+            <div className="grid grid-cols-5 gap-1.5 flex-1 min-h-0 overflow-y-auto content-start pr-0.5">
               {orderedQuestions.map((q, idx) => {
                 const answered = isQuestionAnswered(q, attempt.answers[q.id]);
                 const flagged = attempt.flaggedQuestionIds.includes(q.id);
@@ -1152,7 +1525,7 @@ export function ExamWorkspace({
                     aria-label={`Nomor soal ${idx + 1}${answered ? ', sudah dijawab' : ', belum dijawab'}${
                       flagged ? ', ragu-ragu' : ''
                     }`}
-                    className={`h-10 rounded-lg border font-mono text-xs font-bold transition-colors ${cls}`}
+                    className={`h-8 rounded-lg border font-mono text-xs font-bold transition-colors ${cls}`}
                   >
                     {idx + 1}
                   </button>
@@ -1160,18 +1533,18 @@ export function ExamWorkspace({
               })}
             </div>
 
-            {/* Clean Legend */}
-            <div className="grid grid-cols-3 gap-2 border-t border-slate-100 dark:border-slate-800 pt-3 text-[11px] text-slate-600 dark:text-slate-400">
-              <div className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded bg-emerald-600 shrink-0" />
-                <span>Dijawab ({answeredCount})</span>
+            {/* Compact Legend */}
+            <div className="shrink-0 grid grid-cols-3 gap-1 border-t border-slate-100 dark:border-slate-800 pt-2 text-[10px] text-slate-600 dark:text-slate-400">
+              <div className="flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded bg-emerald-600 shrink-0" />
+                <span>Isi ({answeredCount})</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded bg-amber-300 border border-amber-500 shrink-0" />
+              <div className="flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded bg-amber-300 border border-amber-500 shrink-0" />
                 <span>Ragu ({flaggedCount})</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded border border-slate-300 bg-white dark:bg-slate-800 shrink-0" />
+              <div className="flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded border border-slate-300 bg-white dark:bg-slate-800 shrink-0" />
                 <span>Kosong ({unansweredCount})</span>
               </div>
             </div>
@@ -1182,121 +1555,105 @@ export function ExamWorkspace({
                 setConfirmChecked(false);
                 setShowSubmitModal(true);
               }}
-              className="w-full rounded-lg bg-slate-900 dark:bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-slate-800 dark:hover:bg-indigo-700"
+              className="shrink-0 w-full rounded-lg bg-slate-900 dark:bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:hover:bg-indigo-700"
             >
               Kumpulkan & Selesai Ujian
             </button>
           </div>
 
-          {/* Camera & Audio Proctor Card */}
-          {db.security.requireCameraMonitoring && (
-            <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 p-4 space-y-3 text-xs">
-              <div className="flex items-center justify-between font-semibold">
-                <span className="inline-flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
-                  <Camera className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
-                  <span>Kamera Pengawas</span>
-                </span>
-                <span
-                  className={`font-semibold ${
-                    cameraState !== 'active'
-                      ? 'text-rose-600 dark:text-rose-400'
-                      : cameraBehaviorStatus === 'focused'
-                      ? 'text-emerald-700 dark:text-emerald-400'
-                      : 'text-amber-600 dark:text-amber-400'
-                  }`}
-                >
-                  {cameraState !== 'active'
-                    ? 'Nonaktif'
-                    : cameraBehaviorStatus === 'talking'
-                    ? 'Mengobrol!'
-                    : cameraBehaviorStatus === 'looking_away'
-                    ? 'Menoleh!'
-                    : 'Fokus'}
-                </span>
-              </div>
+          {/* Compact Camera & Integrity Monitor Card */}
+          <div className="shrink-0 rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 p-3 space-y-2 text-xs">
+            {db.security.requireCameraMonitoring && (
+              <>
+                <div className="flex items-center justify-between font-semibold">
+                  <span className="inline-flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
+                    <Camera className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>Kamera Pengawas</span>
+                  </span>
+                  <span
+                    className={`font-semibold text-[11px] ${
+                      cameraState !== 'active'
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : cameraBehaviorStatus === 'focused'
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : 'text-amber-600 dark:text-amber-400'
+                    }`}
+                  >
+                    {cameraStatusLabel}
+                  </span>
+                </div>
 
-              <div className="relative aspect-video w-full overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-900 flex items-center justify-center">
-                <video
-                  ref={proctorVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className={`h-full w-full object-cover -scale-x-100 ${
-                    cameraState === 'active' ? 'block' : 'hidden'
-                  }`}
-                />
-                {cameraState !== 'active' && (
-                  <div className="flex flex-col items-center gap-1.5 px-3 text-center text-slate-400">
-                    <CameraOff className="h-5 w-5" />
-                    <span className="text-[11px]">
-                      {cameraErrorMsg || 'Menyiapkan kamera pengawas...'}
-                    </span>
-                  </div>
-                )}
-              </div>
+                <div className="relative h-24 w-full overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-900 flex items-center justify-center">
+                  <video
+                    ref={proctorVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`h-full w-full object-cover -scale-x-100 ${
+                      cameraState === 'active' ? 'block' : 'hidden'
+                    }`}
+                  />
+                  {cameraState !== 'active' && (
+                    <div className="flex flex-col items-center gap-1 px-2 text-center text-slate-400">
+                      <CameraOff className="h-4 w-4" />
+                      <span className="text-[10px]">
+                        {cameraErrorMsg || 'Menyiapkan kamera...'}
+                      </span>
+                    </div>
+                  )}
+                </div>
 
-              {cameraState === 'active' ? (
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                {cameraState === 'active' ? (
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
                     <span className="inline-flex items-center gap-1">
                       {micActive ? (
                         <Mic className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
                       ) : (
                         <MicOff className="h-3 w-3 text-slate-400" />
                       )}
-                      <span>{micActive ? 'Sensor Suara Aktif' : 'Mikrofon Tidak Aktif'}</span>
+                      <span className="font-mono tabular-nums">{audioLevelPct}%</span>
                     </span>
-                    <span className="font-mono tabular-nums">{audioLevelPct}%</span>
+                    <button
+                      type="button"
+                      onClick={resetCameraCalibration}
+                      className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                    >
+                      Kalibrasi Wajah
+                    </button>
                   </div>
-                  <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        audioLevelPct > 35 ? 'bg-rose-500' : 'bg-emerald-500'
-                      }`}
-                      style={{ width: `${audioLevelPct}%` }}
-                    />
-                  </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    Hadapkan wajah ke layar. Menoleh kanan/kiri atau mengobrol dicatat sebagai pelanggaran.
-                  </p>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setCameraRetryNonce((n) => n + 1)}
-                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
-                >
-                  <Camera className="h-3.5 w-3.5" />
-                  <span>Aktifkan Ulang Kamera</span>
-                </button>
-              )}
-            </div>
-          )}
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setCameraRetryNonce((n) => n + 1)}
+                    className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-700"
+                  >
+                    <Camera className="h-3.5 w-3.5" />
+                    <span>Aktifkan Ulang Kamera</span>
+                  </button>
+                )}
+              </>
+            )}
 
-          {/* Integrity Monitor Card */}
-          <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 p-4 space-y-2.5 text-xs">
-            <div className="flex items-center justify-between font-semibold">
-              <span className="text-slate-700 dark:text-slate-300">
-                Pengawasan Integritas
-              </span>
+            <div className="flex items-center justify-between border-t border-slate-100 dark:border-slate-800 pt-2 font-semibold text-[11px]">
+              <span className="text-slate-600 dark:text-slate-400">Integritas Pelanggaran</span>
               <span
                 className={`font-mono tabular-nums ${
-                  attempt.violationCount > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-700 dark:text-emerald-400'
+                  attempt.violationCount > 0
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : 'text-emerald-700 dark:text-emerald-400'
                 }`}
               >
                 {attempt.violationCount} / {db.security.maxViolationTolerance}
               </span>
             </div>
-            <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
-              Jangan berpindah tab, mengecilkan jendela, menoleh berulang, atau menekan tombol pintasan terlarang selama ujian berlangsung.
-            </p>
+
             {db.security.requireFullscreen && !document.fullscreenElement && (
               <button
                 type="button"
                 onClick={requestEnterFullscreen}
-                className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/60 px-3 py-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/60 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-700 dark:text-indigo-300"
               >
-                <Maximize2 className="h-3.5 w-3.5" />
+                <Maximize2 className="h-3 w-3" />
                 <span>Aktifkan Layar Penuh</span>
               </button>
             )}
@@ -1304,9 +1661,26 @@ export function ExamWorkspace({
         </aside>
       </main>
 
-      {/* Mobile Navigator Drawer */}
+      {/* FULL-SCREEN OPAQUE ANTI-SCREENSHOT SHIELD OVERLAY */}
+      {screenshotShieldActive && (
+        <div
+          data-testid="screenshot-shield-overlay"
+          role="alert"
+          className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-950 p-6 text-center text-white"
+        >
+          <ShieldAlert className="h-14 w-14 text-rose-500 mb-3" />
+          <h2 className="text-xl font-bold tracking-tight">
+            TANGKAPAN LAYAR (SCREENSHOT) DIBLOKIR!
+          </h2>
+          <p className="mt-2 max-w-md text-xs text-slate-300 leading-relaxed">
+            Sistem mendeteksi percobaan mengambil tangkapan layar. Isi soal langsung disembunyikan dan pelanggaran telah dicatat untuk pengawas.
+          </p>
+        </div>
+      )}
+
+      {/* Mobile Navigator Drawer (< md) */}
       {mobileNavOpen && (
-        <div className="fixed inset-0 z-40 lg:hidden flex justify-end">
+        <div className="fixed inset-0 z-40 md:hidden flex justify-end">
           <div
             className="fixed inset-0 bg-slate-900/60"
             onClick={() => setMobileNavOpen(false)}

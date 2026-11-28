@@ -4,9 +4,10 @@ export type QuestionType =
   | 'single_choice'
   | 'multiple_choice'
   | 'matching'
-  | 'true_false';
+  | 'true_false'
+  | 'essay';
 
-export type ExamCategory = 'Ulangan Resmi' | 'Latihan Mandiri';
+export type ExamCategory = 'Ulangan Resmi' | 'UTS / PTS' | 'Latihan Mandiri';
 
 export type StudentAttemptStatus =
   | 'not_started'
@@ -44,6 +45,7 @@ export interface GlobalSecurityConfig {
   enableDynamicWatermark: boolean;
   requireCameraMonitoring: boolean;
   showScoreAndExplanationAuto: boolean;
+  detectNotificationBarAndScreenshot?: boolean;
   maxViolationTolerance: number; // 1 to 5
 }
 
@@ -99,8 +101,20 @@ export interface Question {
   correctOptionIds?: string[]; // for multiple_choice
   matchingPairs?: MatchingPair[]; // for matching
   correctBoolean?: boolean; // for true_false
+  essayAnswerKey?: string; // for essay (kunci jawaban acuan makna)
+  essayKeywords?: string[]; // for essay (kata/konsep kunci opsional)
+  essayMinWords?: number; // for essay
   points: number;
   explanation: string;
+}
+
+export interface EssayGradeResult {
+  scoreRatio: number; // 0..1
+  earnedPoints: number;
+  maxPoints: number;
+  matchPercent: number; // 0..100
+  feedback: string;
+  gradedBy: 'semantic_local' | 'ai_semantic';
 }
 
 export interface ExamPackage {
@@ -117,11 +131,14 @@ export interface ExamPackage {
   shuffleQuestions: boolean;
   shuffleOptions: boolean;
   isPublished: boolean;
+  /** When enabled by subject teacher, allows students to access this package whenever the teacher activates it */
+  allowIndependentAccess?: boolean;
+  teacherActivatedAt?: string;
   createdAt: string;
 }
 
 export type StudentAnswerValue =
-  | string // single_choice optionId
+  | string // single_choice optionId OR essay text answer
   | string[] // multiple_choice optionIds
   | Record<string, string> // matching: pairId -> selected right text
   | boolean; // true_false
@@ -154,9 +171,12 @@ export interface ExamAttempt {
   questionOrder: string[];
   optionOrders: Record<string, string[]>; // questionId -> optionIds order
   answers: Record<string, StudentAnswerValue>;
+  essayGrades?: Record<string, EssayGradeResult>;
   flaggedQuestionIds: string[];
   violationCount: number;
   lockReason?: string;
+  unlockedAt?: string;
+  updatedAt?: string;
   score?: number;
   correctCount?: number;
   totalQuestions?: number;

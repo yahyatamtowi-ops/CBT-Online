@@ -17,6 +17,7 @@ export interface AppsScriptForwardRequest {
   action: AppsScriptAction;
   secret?: string;
   database?: unknown;
+  timeoutMs?: number;
 }
 
 export interface AppsScriptForwardResult {
@@ -268,8 +269,12 @@ export async function forwardToAppsScript(
     currentUrl = target.toString();
   }
 
+  const timeoutMs = Math.max(
+    3000,
+    Math.min(25000, Number(req.timeoutMs) || 25000)
+  );
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 25000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     let response: Response | null = null;

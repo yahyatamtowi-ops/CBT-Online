@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   CheckSquare,
   Copy,
   Download,
@@ -9,6 +10,7 @@ import {
   Image as ImageIcon,
   Plus,
   Scale,
+  Sparkles,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -22,7 +24,10 @@ import type {
 } from '../../types/cbt';
 import {
   generateQuestionsCSVTemplate,
+  MAX_ESSAY_QUESTIONS,
+  MIN_ESSAY_QUESTIONS,
   parseQuestionsBulkText,
+  validateEssayQuestionLimit,
   type CollectiveQuestionPatch,
   type WeightDistributionMode,
 } from '../../utils/cbtLogic';
@@ -40,6 +45,7 @@ const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
   multiple_choice: 'PG Kompleks',
   matching: 'Menjodohkan',
   true_false: 'Benar / Salah',
+  essay: 'Soal Esai',
 };
 
 export function QuestionBankEditor({
@@ -55,6 +61,7 @@ export function QuestionBankEditor({
     db,
     upsertQuestion,
     deleteQuestion,
+    autoBalancePackagePoints,
     bulkAddQuestions,
     bulkUpdateQuestions,
     applyQuestionWeightDistribution,
@@ -104,13 +111,20 @@ export function QuestionBankEditor({
     { id: 'p-3', left: '', right: '' },
   ]);
   const [correctBoolean, setCorrectBoolean] = useState(true);
+  const [essayAnswerKey, setEssayAnswerKey] = useState('');
+  const [essayKeywordsText, setEssayKeywordsText] = useState('');
+  const [autoBalanceOnSave, setAutoBalanceOnSave] = useState(false);
 
   const [bulkText, setBulkText] = useState('');
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  const openNewQuestion = () => {
+  const essayValidation = currentPkg
+    ? validateEssayQuestionLimit(db.questions, currentPkg.id)
+    : null;
+
+  const openNewQuestion = (initialType: QuestionType = 'single_choice') => {
     setEditingId(null);
-    setQType('single_choice');
+    setQType(initialType);
     setPrompt('');
     setImageUrl('');
     setPoints(10);
@@ -129,6 +143,9 @@ export function QuestionBankEditor({
       { id: 'p-3', left: '', right: '' },
     ]);
     setCorrectBoolean(true);
+    setEssayAnswerKey('');
+    setEssayKeywordsText('');
+    setAutoBalanceOnSave(initialType === 'essay');
     setShowEditor(true);
     setShowBulkImport(false);
     setShowWeightPanel(false);
@@ -164,6 +181,9 @@ export function QuestionBankEditor({
           ]
     );
     setCorrectBoolean(q.correctBoolean ?? true);
+    setEssayAnswerKey(q.essayAnswerKey || '');
+    setEssayKeywordsText((q.essayKeywords || []).join(', '));
+    setAutoBalanceOnSave(false);
     setShowEditor(true);
     setShowBulkImport(false);
     setShowWeightPanel(false);
@@ -255,26 +275,69 @@ export function QuestionBankEditor({
       }
     }
 
+    if (qType === 'essay') {
+      const existingEditing = editingId
+        ? pkgQuestions.find((item) => item.id === editingId)
+        : null;
+      const isAddingNewEssay = !existingEditing || existingEditing.type !== 'essay';
+      if (
+        isAddingNewEssay &&
+        essayValidation &&
+        !essayValidation.canAddMore
+      ) {
+        setFeedback({
+          type: 'err',
+          text: `Batas maksimal soal esai tercapai (${MAX_ESSAY_QUESTIONS} soal per paket). Hapus atau edit soal esai yang ada.`,
+        });
+        return;
+      }
+      if (!essayAnswerKey.trim()) {
+        setFeedback({
+          type: 'err',
+          text: 'Kunci jawaban acuan makna wajib diisi agar sistem dapat mengoreksi jawaban esai secara otomatis.',
+        });
+        return;
+      }
+    }
+
+    const parsedEssayKeywords = essayKeywordsText
+      .split(/[,;\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
     const numericPoints = Number(points);
     const safePoints =
       Number.isFinite(numericPoints) && numericPoints > 0
         ? Math.max(0.1, Number(numericPoints.toFixed(2)))
         : 10;
 
-    upsertQuestion({
-      id: editingId || undefined,
-      packageId: currentPkg.id,
-      type: qType,
-      prompt: prompt.trim(),
-      imageUrl: imageUrl.trim() || undefined,
-      options: qType === 'single_choice' || qType === 'multiple_choice' ? cleanedOptions : undefined,
-      correctOptionId: qType === 'single_choice' ? resolvedCorrectSingle : undefined,
-      correctOptionIds: qType === 'multiple_choice' ? resolvedCorrectMulti : undefined,
-      matchingPairs: qType === 'matching' ? cleanedPairs : undefined,
-      correctBoolean: qType === 'true_false' ? correctBoolean : undefined,
-      points: safePoints,
-      explanation: explanation.trim() || 'Sesuai kunci jawaban paket soal.',
-    });
+    const shouldAutoBalance = autoBalanceOnSave || (qType === 'essay' && !editingId);
+
+    upsertQuestion(
+      {
+        id: editingId || undefined,
+        packageId: currentPkg.id,
+        type: qType,
+        prompt: prompt.trim(),
+        imageUrl: imageUrl.trim() || undefined,
+        options:
+          qType === 'single_choice' || qType === 'multiple_choice'
+            ? cleanedOptions
+            : undefined,
+        correctOptionId: qType === 'single_choice' ? resolvedCorrectSingle : undefined,
+        correctOptionIds: qType === 'multiple_choice' ? resolvedCorrectMulti : undefined,
+        matchingPairs: qType === 'matching' ? cleanedPairs : undefined,
+        correctBoolean: qType === 'true_false' ? correctBoolean : undefined,
+        essayAnswerKey: qType === 'essay' ? essayAnswerKey.trim() : undefined,
+        essayKeywords:
+          qType === 'essay' && parsedEssayKeywords.length > 0
+            ? parsedEssayKeywords
+            : undefined,
+        points: safePoints,
+        explanation: explanation.trim() || 'Sesuai kunci jawaban paket soal.',
+      },
+      { autoBalancePoints: shouldAutoBalance }
+    );
 
     if (selectedPackageId !== currentPkg.id) {
       onSelectPackage(currentPkg.id);
@@ -282,7 +345,11 @@ export function QuestionBankEditor({
     setShowEditor(false);
     setFeedback({
       type: 'ok',
-      text: editingId ? 'Butir soal berhasil diperbarui.' : 'Butir soal baru ditambahkan ke bank soal.',
+      text: editingId
+        ? 'Butir soal berhasil diperbarui.'
+        : shouldAutoBalance
+          ? 'Butir soal baru ditambahkan dan bobot poin seluruh soal otomatis dibagi ke total 100.'
+          : 'Butir soal baru ditambahkan ke bank soal.',
     });
   };
 
@@ -318,7 +385,19 @@ export function QuestionBankEditor({
       });
       return;
     }
+    const incomingEssays = parsed.questions.filter((q) => q.type === 'essay').length;
+    const existingEssays = essayValidation?.essayCount ?? 0;
+    if (existingEssays + incomingEssays > MAX_ESSAY_QUESTIONS) {
+      setFeedback({
+        type: 'err',
+        text: `Import dibatalkan: jumlah soal esai akan menjadi ${existingEssays + incomingEssays}, melebihi batas maksimal ${MAX_ESSAY_QUESTIONS} soal esai per paket.`,
+      });
+      return;
+    }
     bulkAddQuestions(parsed.questions);
+    if (incomingEssays > 0) {
+      autoBalancePackagePoints(currentPkg.id, 100);
+    }
     if (selectedPackageId !== currentPkg.id) {
       onSelectPackage(currentPkg.id);
     }
@@ -327,6 +406,8 @@ export function QuestionBankEditor({
     setFeedback({
       type: 'ok',
       text: `Berhasil mengimpor ${parsed.questions.length} butir soal ke paket "${currentPkg.title}"${
+        incomingEssays > 0 ? ' (bobot poin otomatis dibagi rata ke 100)' : ''
+      }${
         parsed.errors.length > 0 ? ` (${parsed.errors.length} baris dilewati)` : ''
       }.`,
     });
@@ -449,7 +530,7 @@ export function QuestionBankEditor({
             Bank Soal & Editor Interaktif
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Kelola soal Pilihan Ganda, PG Kompleks, Menjodohkan, dan Benar/Salah lengkap dengan gambar & pembahasan.
+            Kelola soal Pilihan Ganda, PG Kompleks, Menjodohkan, Benar/Salah, dan Soal Esai (koreksi semantik otomatis · 5–10 soal).
           </p>
         </div>
 
@@ -533,7 +614,7 @@ export function QuestionBankEditor({
 
           <button
             type="button"
-            onClick={openNewQuestion}
+            onClick={() => openNewQuestion('single_choice')}
             className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 whitespace-nowrap"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -541,6 +622,65 @@ export function QuestionBankEditor({
           </button>
         </div>
       </div>
+
+      {/* Essay Count & Auto Point Distribution Banner */}
+      {essayValidation && (essayValidation.essayCount > 0 || (showEditor && qType === 'essay')) && (
+        <div
+          data-testid="essay-limit-banner"
+          className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs ${
+            essayValidation.isUnderMin || essayValidation.essayCount > MAX_ESSAY_QUESTIONS
+              ? 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200'
+              : 'border-emerald-200 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200'
+          }`}
+        >
+          <div className="flex items-start gap-2.5">
+            {essayValidation.isUnderMin || essayValidation.essayCount > MAX_ESSAY_QUESTIONS ? (
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+            ) : (
+              <Sparkles className="h-4 w-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+            )}
+            <div className="space-y-0.5">
+              <p className="font-bold">
+                Soal Esai Koreksi Otomatis: {essayValidation.essayCount} / {MAX_ESSAY_QUESTIONS} Soal (Minimal {MIN_ESSAY_QUESTIONS}, Maksimal {MAX_ESSAY_QUESTIONS})
+              </p>
+              <p className="opacity-90">
+                {essayValidation.isUnderMin
+                  ? `Tambahkan minimal ${MIN_ESSAY_QUESTIONS - essayValidation.essayCount} soal esai lagi agar memenuhi ketentuan paket esai (5–10 soal).`
+                  : essayValidation.essayCount >= MAX_ESSAY_QUESTIONS
+                    ? 'Jumlah soal esai sudah mencapai batas maksimal 10 soal. Poin penilaian dibagi otomatis sesuai ketepatan makna jawaban siswa.'
+                    : 'Jumlah soal esai sudah sesuai ketentuan (5–10 soal). Sistem mengoreksi makna jawaban secara otomatis meskipun diksi berbeda.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                autoBalancePackagePoints(currentPkg.id, 100);
+                setFeedback({
+                  type: 'ok',
+                  text: 'Bobot poin seluruh soal pada paket otomatis dibagi merata menjadi total 100 poin.',
+                });
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50"
+            >
+              <Scale className="h-3.5 w-3.5" />
+              <span>Bagi Poin Otomatis (100)</span>
+            </button>
+            {essayValidation.canAddMore && !showEditor && (
+              <button
+                type="button"
+                onClick={() => openNewQuestion('essay')}
+                className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Tambah Esai</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {feedback && (
         <div
@@ -586,7 +726,8 @@ export function QuestionBankEditor({
               <p className="text-xs text-slate-600 dark:text-slate-400">
                 Opsi A–D maupun A–E terdeteksi otomatis sesuai input. Format tabel (<code className="font-mono">|</code>, <code className="font-mono">;</code>, <code className="font-mono">,</code>, atau Tab):{' '}
                 <code className="font-mono">PG | Pertanyaan | A | B | C | D | E | Kunci | Pembahasan</code> (kosongkan E jika hanya A–D) ·{' '}
-                <code className="font-mono">PGK | ... | A,E | ...</code> · <code className="font-mono">BS | Pernyataan | Benar/Salah | Pembahasan</code> · atau tempel langsung format bernomor (<code className="font-mono">1. Soal ... A. ... E. ... Kunci: E</code>).
+                <code className="font-mono">PGK | ... | A,E | ...</code> · <code className="font-mono">BS | Pernyataan | Benar/Salah | Pembahasan</code> ·{' '}
+                <code className="font-mono">ESAI | Pertanyaan | Kunci Jawaban Acuan | Kata Kunci (pisah ;) | Pembahasan</code>.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 self-start">
@@ -615,7 +756,7 @@ export function QuestionBankEditor({
             value={bulkText}
             onChange={(e) => setBulkText(e.target.value)}
             aria-label="Format soal massal"
-            placeholder={'PG | Pertanyaan 5 opsi (A–E)? | Opsi A | Opsi B | Opsi C | Opsi D | Opsi E | E | Pembahasan singkat\nPG | Pertanyaan 4 opsi (A–D)? | Opsi A | Opsi B | Opsi C | Opsi D | B | Pembahasan singkat\nBS | Pernyataan benar atau salah. | Benar | Alasan singkat'}
+            placeholder={'PG | Pertanyaan 5 opsi (A–E)? | Opsi A | Opsi B | Opsi C | Opsi D | Opsi E | E | Pembahasan singkat\nBS | Pernyataan benar atau salah. | Benar | Alasan singkat\nESAI | Jelaskan proses fotosintesis pada tumbuhan! | Tumbuhan mengubah air dan karbon dioksida menjadi glukosa dan oksigen dengan bantuan cahaya matahari | klorofil;cahaya matahari;glukosa;oksigen | Fotosintesis terjadi di kloroplas'}
             className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 font-mono text-xs text-slate-800 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
           />
           <div className="flex justify-end gap-2">
@@ -654,12 +795,18 @@ export function QuestionBankEditor({
                   'multiple_choice',
                   'matching',
                   'true_false',
+                  'essay',
                 ] as QuestionType[]
               ).map((t) => (
                 <button
                   key={t}
                   type="button"
-                  onClick={() => setQType(t)}
+                  onClick={() => {
+                    setQType(t);
+                    if (t === 'essay' && !editingId) {
+                      setAutoBalanceOnSave(true);
+                    }
+                  }}
                   className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                     qType === t
                       ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs'
@@ -912,6 +1059,69 @@ export function QuestionBankEditor({
               </div>
             </div>
           )}
+
+          {qType === 'essay' && (
+            <div className="space-y-3 rounded-xl border border-emerald-200 dark:border-emerald-900/70 bg-emerald-50/40 dark:bg-emerald-950/20 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                  Konfigurasi Koreksi Semantik Soal Esai (Otomatis)
+                </p>
+                <span className="font-mono text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                  Kuota Esai Paket: {essayValidation?.essayCount ?? 0} / {MAX_ESSAY_QUESTIONS} (Min {MIN_ESSAY_QUESTIONS})
+                </span>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="q-essay-key"
+                  className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1"
+                >
+                  Kunci Jawaban Acuan Makna (Wajib)
+                </label>
+                <textarea
+                  id="q-essay-key"
+                  rows={3}
+                  value={essayAnswerKey}
+                  onChange={(e) => setEssayAnswerKey(e.target.value)}
+                  placeholder="Tuliskan jawaban ideal yang benar. Sistem akan menilai kesesuaian makna secara proporsional walaupun siswa menggunakan diksi atau susunan kalimat yang berbeda..."
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="q-essay-keywords"
+                  className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1"
+                >
+                  Kata / Konsep Kunci Utama (Opsional — pisahkan dengan koma atau titik koma)
+                </label>
+                <input
+                  id="q-essay-keywords"
+                  type="text"
+                  value={essayKeywordsText}
+                  onChange={(e) => setEssayKeywordsText(e.target.value)}
+                  placeholder="Contoh: klorofil, cahaya matahari, glukosa, oksigen"
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:border-indigo-600 focus:outline-none"
+                />
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                  Nilai diberikan secara proporsional sesuai tingkat kesesuaian makna jawaban siswa terhadap kunci jawaban.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Auto Balance Points Toggle */}
+          <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoBalanceOnSave}
+              onChange={(e) => setAutoBalanceOnSave(e.target.checked)}
+              className="rounded border-slate-300 text-indigo-600"
+            />
+            <span>
+              Bagi poin seluruh soal pada paket secara otomatis ke total <strong>100 poin</strong> saat menyimpan
+            </span>
+          </label>
 
           {/* Explanation */}
           <div>
@@ -1185,6 +1395,22 @@ export function QuestionBankEditor({
               </div>
             )}
 
+            {q.type === 'essay' && (
+              <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50/60 dark:bg-emerald-950/30 p-3 space-y-1 text-xs">
+                <div className="font-semibold text-emerald-800 dark:text-emerald-300">
+                  Kunci Jawaban Acuan Makna (Koreksi Otomatis):
+                </div>
+                <p className="text-slate-800 dark:text-slate-200 leading-relaxed">
+                  {q.essayAnswerKey || '—'}
+                </p>
+                {q.essayKeywords && q.essayKeywords.length > 0 && (
+                  <div className="text-[11px] text-emerald-700 dark:text-emerald-400 pt-1">
+                    Kata Kunci: <span className="font-mono">{q.essayKeywords.join(' · ')}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {q.explanation && (
               <div className="border-t border-slate-100 dark:border-slate-800 pt-2.5 text-xs text-slate-600 dark:text-slate-400">
                 <span className="font-semibold text-slate-800 dark:text-slate-200">Pembahasan: </span>
@@ -1203,7 +1429,7 @@ export function QuestionBankEditor({
             <div className="flex flex-wrap justify-center gap-2">
               <button
                 type="button"
-                onClick={openNewQuestion}
+                onClick={() => openNewQuestion('single_choice')}
                 className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
               >
                 Tambah Soal Pertama

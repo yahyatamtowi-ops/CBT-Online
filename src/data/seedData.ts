@@ -30,6 +30,7 @@ export function createInitialSeedDatabase(): CBTDatabase {
       enableDynamicWatermark: true,
       requireCameraMonitoring: true,
       showScoreAndExplanationAuto: true,
+      detectNotificationBarAndScreenshot: true,
       maxViolationTolerance: 3,
     },
     schedule: {

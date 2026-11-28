@@ -1,5 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useCBT } from '../../context/CBTContext';
+import {
+  findStudentPackageAttempt,
+  resolveEffectiveAttemptStatus,
+} from '../../utils/cbtLogic';
 import { ExamResultView } from './ExamResultView';
 import { ExamWorkspace } from './ExamWorkspace';
 import { PreFlightCheck } from './PreFlightCheck';
@@ -14,15 +18,26 @@ export function StudentPortal() {
     session?.packageId
   );
 
-  const student = db.students.find((s) => s.id === session?.userId);
+  const student = db.students.find(
+    (s) =>
+      s.id === session?.userId ||
+      (session?.nisn && s.nisn.trim() === session.nisn.trim())
+  );
   const activePackageId = selectedPackageId || session?.packageId;
   const examPackage = db.packages.find((p) => p.id === activePackageId);
   const existingAttempt =
     student && examPackage
-      ? db.attempts.find(
-          (a) => a.studentId === student.id && a.packageId === examPackage.id
+      ? findStudentPackageAttempt(
+          db.attempts,
+          student,
+          examPackage.id,
+          db.security.maxViolationTolerance
         )
       : undefined;
+  const effectiveStatus = resolveEffectiveAttemptStatus(
+    existingAttempt,
+    db.security.maxViolationTolerance
+  );
 
   useEffect(() => {
     if (session?.packageId && !selectedPackageId) {
@@ -36,16 +51,23 @@ export function StudentPortal() {
     }
   }, [examPackage, existingAttempt, startOrResumeAttempt, student, view]);
 
-  // Auto-transition from active workspace to result view once submitted or locked
+  // Auto-transition from active workspace to result view once submitted or locked,
+  // and back to preflight if teacher unlocks a locked attempt!
   useEffect(() => {
     if (
       view === 'workspace' &&
       existingAttempt &&
-      (existingAttempt.status === 'completed' || existingAttempt.status === 'locked')
+      (effectiveStatus === 'completed' || effectiveStatus === 'locked')
     ) {
       setView('result');
+    } else if (
+      view === 'result' &&
+      existingAttempt &&
+      effectiveStatus === 'in_progress'
+    ) {
+      setView('preflight');
     }
-  }, [existingAttempt, view]);
+  }, [effectiveStatus, existingAttempt, view]);
 
   if (!student) {
     return (
@@ -88,7 +110,7 @@ export function StudentPortal() {
   if (
     view === 'result' ||
     (existingAttempt &&
-      (existingAttempt.status === 'completed' || existingAttempt.status === 'locked'))
+      (effectiveStatus === 'completed' || effectiveStatus === 'locked'))
   ) {
     if (!existingAttempt) {
       return (

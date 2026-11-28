@@ -17,6 +17,7 @@ import {
 } from '../utils/cbtLogic';
 import { StaffLoginPage, type StaffRole } from './StaffLoginPage';
 import { ExamProgressBar } from './student/ExamProgressBar';
+import { FullscreenToggleButton } from './FullscreenToggleButton';
 
 export function SchoolLogo({
   src,
@@ -135,8 +136,9 @@ export function LandingPortal() {
 
   return (
     <div className="min-h-screen bg-slate-50/90 dark:bg-slate-950/95 text-slate-900 dark:text-slate-100 flex flex-col batik-shell">
-      {/* Top-Right Corner Icon-Only Staff Login Triggers (No Visible Labels, No Top Menu Bar) */}
-      <div className="mx-auto w-full max-w-6xl px-4 pt-4 sm:px-6 sm:pt-5 flex justify-end">
+      {/* Top Utility Bar: Fullscreen Bar + Icon-Only Staff Login Triggers */}
+      <div className="mx-auto w-full max-w-6xl px-4 pt-4 sm:px-6 sm:pt-5 flex items-center justify-between gap-2">
+        <FullscreenToggleButton variant="landing" />
         <div
           role="group"
           aria-label="Akses Portal Pengelola"

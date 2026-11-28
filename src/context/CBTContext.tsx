@@ -11,6 +11,7 @@ import type {
   ActiveSession,
   AuditLogEntry,
   CBTDatabase,
+  EssayGradeResult,
   ExamAttempt,
   ExamPackage,
   GlobalSecurityConfig,
@@ -33,9 +34,15 @@ import {
   applyBulkUserStatus,
   applyCollectiveQuestionEdits,
   applySelectiveDelete,
+  autoDistributePackagePoints,
   calculateExamScore,
+  computeUnlockExtraMinutes,
   distributeQuestionWeights,
   evaluateViolationEscalation,
+  findStudentPackageAttempt,
+  isAttemptViolationLocked,
+  mergeExamAttempts,
+  resolveEffectiveAttemptStatus,
   seededShuffle,
   shouldApplyRemotePull,
   validateAppsScriptUrl,
@@ -150,6 +157,8 @@ interface CBTContextValue {
   importDatabaseJSON: (jsonStr: string) => { ok: boolean; error?: string };
   resetAllData: () => void;
   deleteSelectedData: (options: SelectiveDeleteOptions) => { deletedCategories: string[] };
+  deleteViolationLogs: (options: { ids?: string[]; keepLatest?: number; clearAll?: boolean }) => number;
+  deleteAuditLogs: (options: { ids?: string[]; keepLatest?: number; clearAll?: boolean }) => number;
   syncRuntime: SpreadsheetSyncRuntime;
   serverAutoSyncStatus: ServerAutoSyncStatus;
   firestoreAutoSync: {
@@ -173,9 +182,17 @@ interface CBTContextValue {
   ) => Promise<{ ok: boolean; message: string }>;
   // Teacher: Packages & Questions
   upsertExamPackage: (pkg: Omit<ExamPackage, 'id' | 'createdAt'> & { id?: string }) => string;
+  togglePackagePublished: (packageId: string) => void;
   deleteExamPackage: (packageId: string) => void;
-  upsertQuestion: (q: Omit<Question, 'id'> & { id?: string }) => void;
-  deleteQuestion: (questionId: string) => void;
+  upsertQuestion: (
+    q: Omit<Question, 'id'> & { id?: string },
+    options?: { autoBalancePoints?: boolean }
+  ) => void;
+  deleteQuestion: (
+    questionId: string,
+    options?: { autoBalancePoints?: boolean }
+  ) => void;
+  autoBalancePackagePoints: (packageId: string, targetTotal?: number) => void;
   bulkAddQuestions: (questions: Question[]) => void;
   bulkUpdateQuestions: (patches: CollectiveQuestionPatch[]) => number;
   applyQuestionWeightDistribution: (
@@ -190,7 +207,10 @@ interface CBTContextValue {
     mode: 'copy' | 'move'
   ) => number;
   // Teacher: Proctoring Actions
-  unlockOrResetAttempt: (attemptId: string, mode: 'unlock' | 'reset') => void;
+  unlockOrResetAttempt: (
+    attemptId: string,
+    mode: 'unlock' | 'reset'
+  ) => Promise<{ ok: boolean; synced: boolean; message: string }>;
   addExtraTimeToAttempt: (attemptId: string, minutes: number) => void;
   // Student: Attempt Lifecycle
   startOrResumeAttempt: (studentId: string, packageId: string) => ExamAttempt | null;
@@ -228,7 +248,15 @@ function normalizeDB(parsed: Partial<CBTDatabase>): CBTDatabase {
     students: Array.isArray(parsed.students) ? parsed.students : [],
     packages: Array.isArray(parsed.packages) ? parsed.packages : [],
     questions: Array.isArray(parsed.questions) ? parsed.questions : [],
-    attempts: Array.isArray(parsed.attempts) ? parsed.attempts : [],
+    attempts: Array.isArray(parsed.attempts)
+      ? parsed.attempts.map((a) => ({
+          ...a,
+          status: resolveEffectiveAttemptStatus(
+            a,
+            parsed.security?.maxViolationTolerance ?? seed.security.maxViolationTolerance
+          ),
+        }))
+      : [],
     violations: Array.isArray(parsed.violations) ? parsed.violations : [],
     auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
   };
@@ -333,6 +361,7 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
   const serverAutoSyncRef = useRef<ServerAutoSyncStatus>(serverAutoSyncStatus);
   const firebaseUserRef = useRef<User | null>(null);
   const firestoreHydratedRef = useRef(false);
+  const portalInitialPullDoneRef = useRef(false);
   const firestorePushInFlightRef = useRef(false);
   const syncInFlightRef = useRef(false);
   const mutationVersionRef = useRef(0);
@@ -752,6 +781,7 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
           correctCount: summary.correctCount,
           totalQuestions: summary.totalQuestions,
           passed: summary.passed,
+          essayGrades: summary.essayGrades,
         };
       });
 
@@ -1301,17 +1331,93 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
     [commitDb, session]
   );
 
+  const deleteViolationLogs = useCallback(
+    (options: { ids?: string[]; keepLatest?: number; clearAll?: boolean }) => {
+      let removed = 0;
+      commitDb((prev) => {
+        let nextViolations = prev.violations;
+        if (options.clearAll) {
+          nextViolations = [];
+        } else if (typeof options.keepLatest === 'number' && options.keepLatest >= 0) {
+          nextViolations = [...prev.violations]
+            .sort((a, b) => (Date.parse(b.timestamp) || 0) - (Date.parse(a.timestamp) || 0))
+            .slice(0, options.keepLatest);
+        } else if (options.ids && options.ids.length > 0) {
+          const idSet = new Set(options.ids);
+          nextViolations = prev.violations.filter((v) => !idSet.has(v.id));
+        }
+        removed = prev.violations.length - nextViolations.length;
+        if (removed <= 0) return prev;
+        return {
+          ...prev,
+          violations: nextViolations,
+          auditLogs: [
+            makeAudit(
+              'admin',
+              session?.name || 'Super Admin',
+              'Hapus Log Pelanggaran',
+              'violation',
+              options.clearAll
+                ? `Menghapus seluruh ${removed} catatan pelanggaran.`
+                : typeof options.keepLatest === 'number'
+                  ? `Memangkas ${removed} log pelanggaran lama (menyisakan ${nextViolations.length} terbaru).`
+                  : `Menghapus ${removed} catatan pelanggaran terpilih.`
+            ),
+            ...prev.auditLogs,
+          ].slice(0, 200),
+        };
+      });
+      return removed;
+    },
+    [commitDb, session]
+  );
+
+  const deleteAuditLogs = useCallback(
+    (options: { ids?: string[]; keepLatest?: number; clearAll?: boolean }) => {
+      let removed = 0;
+      commitDb((prev) => {
+        let nextLogs = prev.auditLogs;
+        if (options.clearAll) {
+          nextLogs = [];
+        } else if (typeof options.keepLatest === 'number' && options.keepLatest >= 0) {
+          nextLogs = [...prev.auditLogs]
+            .sort((a, b) => (Date.parse(b.timestamp) || 0) - (Date.parse(a.timestamp) || 0))
+            .slice(0, options.keepLatest);
+        } else if (options.ids && options.ids.length > 0) {
+          const idSet = new Set(options.ids);
+          nextLogs = prev.auditLogs.filter((l) => !idSet.has(l.id));
+        }
+        removed = prev.auditLogs.length - nextLogs.length;
+        if (removed <= 0) return prev;
+        return {
+          ...prev,
+          auditLogs: nextLogs,
+        };
+      });
+      return removed;
+    },
+    [commitDb]
+  );
+
   const upsertExamPackage = useCallback(
     (pkg: Omit<ExamPackage, 'id' | 'createdAt'> & { id?: string }) => {
       const id = pkg.id || `pkg-${Date.now()}`;
       commitDb((prev) => {
         const exists = prev.packages.some((p) => p.id === id);
         const existing = prev.packages.find((p) => p.id === id);
+        const now = new Date().toISOString();
         const nextPkg: ExamPackage = {
           ...pkg,
           id,
           token: pkg.token.trim().toUpperCase(),
-          createdAt: existing?.createdAt || new Date().toISOString(),
+          allowIndependentAccess:
+            pkg.allowIndependentAccess !== undefined
+              ? pkg.allowIndependentAccess
+              : existing?.allowIndependentAccess ?? pkg.isPublished,
+          teacherActivatedAt: pkg.isPublished
+            ? existing?.teacherActivatedAt || now
+            : existing?.teacherActivatedAt,
+          createdAt: existing?.createdAt || now,
         };
         const packages = exists
           ? prev.packages.map((p) => (p.id === id ? nextPkg : p))
@@ -1325,13 +1431,50 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
               session?.name || 'Guru',
               exists ? 'Perbarui Paket Ujian' : 'Buat Paket Ujian Baru',
               'exam',
-              `Paket "${nextPkg.title}" (${nextPkg.subject}, Token: ${nextPkg.token}).`
+              `Paket "${nextPkg.title}" (${nextPkg.subject}, ${nextPkg.category}, Token: ${nextPkg.token}, Status: ${nextPkg.isPublished ? 'Aktif' : 'Nonaktif'}).`
             ),
             ...prev.auditLogs,
           ].slice(0, 200),
         };
       });
       return id;
+    },
+    [commitDb, session]
+  );
+
+  const togglePackagePublished = useCallback(
+    (packageId: string) => {
+      commitDb((prev) => {
+        const target = prev.packages.find((p) => p.id === packageId);
+        if (!target) return prev;
+        const nextPublished = !target.isPublished;
+        const now = new Date().toISOString();
+        return {
+          ...prev,
+          packages: prev.packages.map((p) =>
+            p.id === packageId
+              ? {
+                  ...p,
+                  isPublished: nextPublished,
+                  allowIndependentAccess: nextPublished
+                    ? true
+                    : p.allowIndependentAccess,
+                  teacherActivatedAt: nextPublished ? now : p.teacherActivatedAt,
+                }
+              : p
+          ),
+          auditLogs: [
+            makeAudit(
+              session?.role === 'admin' ? 'admin' : 'teacher',
+              session?.name || (session?.role === 'admin' ? 'Super Admin' : 'Guru'),
+              nextPublished ? 'Aktifkan Paket Soal' : 'Nonaktifkan Paket Soal',
+              'exam',
+              `${session?.role === 'admin' ? 'Super Admin' : 'Guru'} ${nextPublished ? 'mengaktifkan' : 'menonaktifkan'} paket "${target.title}" (${target.category}, Token: ${target.token}).`
+            ),
+            ...prev.auditLogs,
+          ].slice(0, 200),
+        };
+      });
     },
     [commitDb, session]
   );
@@ -1361,14 +1504,20 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
   );
 
   const upsertQuestion = useCallback(
-    (q: Omit<Question, 'id'> & { id?: string }) => {
+    (
+      q: Omit<Question, 'id'> & { id?: string },
+      options?: { autoBalancePoints?: boolean }
+    ) => {
       commitDb((prev) => {
         const id = q.id || `q-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
         const exists = prev.questions.some((item) => item.id === id);
         const nextQ: Question = { ...q, id };
-        const questions = exists
+        let questions = exists
           ? prev.questions.map((item) => (item.id === id ? nextQ : item))
           : [...prev.questions, nextQ];
+        if (options?.autoBalancePoints) {
+          questions = autoDistributePackagePoints(questions, nextQ.packageId, 100);
+        }
         return {
           ...prev,
           questions,
@@ -1379,13 +1528,47 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
   );
 
   const deleteQuestion = useCallback(
-    (questionId: string) => {
-      commitDb((prev) => ({
-        ...prev,
-        questions: prev.questions.filter((q) => q.id !== questionId),
-      }));
+    (questionId: string, options?: { autoBalancePoints?: boolean }) => {
+      commitDb((prev) => {
+        const removed = prev.questions.find((q) => q.id === questionId);
+        let questions = prev.questions.filter((q) => q.id !== questionId);
+        if (options?.autoBalancePoints && removed) {
+          questions = autoDistributePackagePoints(questions, removed.packageId, 100);
+        }
+        return {
+          ...prev,
+          questions,
+        };
+      });
     },
     [commitDb]
+  );
+
+  const autoBalancePackagePoints = useCallback(
+    (packageId: string, targetTotal = 100) => {
+      commitDb((prev) => {
+        const nextQuestions = autoDistributePackagePoints(
+          prev.questions,
+          packageId,
+          targetTotal
+        );
+        return {
+          ...prev,
+          questions: nextQuestions,
+          auditLogs: [
+            makeAudit(
+              'teacher',
+              session?.name || 'Guru',
+              'Bagi Poin Soal Otomatis',
+              'exam',
+              `Membagi bobot poin seluruh soal pada paket secara otomatis ke total ${targetTotal} poin.`
+            ),
+            ...prev.auditLogs,
+          ].slice(0, 200),
+        };
+      });
+    },
+    [commitDb, session]
   );
 
   const updateSpreadsheetSyncConfig = useCallback(
@@ -1450,23 +1633,38 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
         if (contentType.includes('application/json')) {
           const data = (await proxyResp.json()) as T;
           if (!data.ok) {
-            throw new Error(data.error || `HTTP ${proxyResp.status}`);
+            // If proxy hit Netlify 502/504 gateway or timeout and client has webAppUrl, fall back to direct fetch
+            const isTransientGateway =
+              proxyResp.status >= 500 && Boolean(params.webAppUrl);
+            if (!isTransientGateway) {
+              throw new Error(data.error || `HTTP ${proxyResp.status}`);
+            }
+          } else {
+            return data;
           }
-          return data;
-        }
-
-        // If /api/spreadsheet-sync is not available (e.g. pure static deployment returning 404 HTML),
-        // fall through to direct browser fetch below.
-        if (proxyResp.status !== 404 && proxyResp.status !== 405) {
-          throw new Error(`HTTP ${proxyResp.status}`);
+        } else {
+          // On Netlify or static hosting, non-JSON 404/405/5xx responses (e.g. function cold-start/timeout HTML)
+          // should gracefully fall through to direct browser fetch when webAppUrl is known.
+          const canFallback =
+            Boolean(params.webAppUrl) &&
+            (proxyResp.status === 404 ||
+              proxyResp.status === 405 ||
+              proxyResp.status >= 500);
+          if (!canFallback) {
+            throw new Error(`HTTP ${proxyResp.status}`);
+          }
         }
       } catch (proxyErr) {
-        // Re-throw real server/Apps Script diagnostic errors rather than masking them with direct CORS failure
-        if (
-          proxyErr instanceof Error &&
-          proxyErr.message &&
-          !proxyErr.message.includes('Failed to fetch')
-        ) {
+        // Re-throw explicit config/auth errors (400/403); fall back to direct fetch on network/timeout errors
+        const msg = proxyErr instanceof Error ? proxyErr.message : '';
+        const isNetworkOrGateway =
+          !msg ||
+          msg.includes('Failed to fetch') ||
+          msg.includes('NetworkError') ||
+          msg.includes('Load failed') ||
+          msg.includes('melebihi batas waktu') ||
+          /^HTTP 5\d\d/.test(msg);
+        if (!isNetworkOrGateway || !params.webAppUrl) {
           throw proxyErr;
         }
       }
@@ -1789,8 +1987,15 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
         const syncedAt = data.updatedAt || new Date().toISOString();
         const normalized = normalizeDB(data.database);
         commitDb(
-          () => ({
+          (prev) => ({
             ...normalized,
+            attempts: isManual
+              ? normalized.attempts
+              : mergeExamAttempts(
+                  prev.attempts,
+                  normalized.attempts,
+                  normalized.security.maxViolationTolerance
+                ),
             spreadsheetSync: {
               ...normalized.spreadsheetSync,
               ...cfg,
@@ -1925,17 +2130,34 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
     return () => window.clearTimeout(timer);
   }, [mutationVersion, pushDatabaseToSpreadsheet, resolveEffectiveAppsScriptTarget]);
 
-  // Optional Periodic Background Pull (skipped while student is in exam or local changes are pending)
+  // Optional Periodic Background Pull:
+  // - Admin/Teacher: runs on configured interval (>= 30s)
+  // - Student: skipped during active exam, EXCEPT when student's attempt is locked so teacher unlocks arrive automatically!
+  const hasLockedStudentAttempt =
+    session?.role === 'student' &&
+    db.attempts.some(
+      (a) =>
+        (a.studentId === session.userId ||
+          (session.nisn && a.studentNisn === session.nisn)) &&
+        isAttemptViolationLocked(a, db.security.maxViolationTolerance)
+    );
+
   useEffect(() => {
     const cfg = db.spreadsheetSync;
-    if (
-      !cfg.enabled ||
-      cfg.autoPullIntervalSeconds < 30 ||
-      !resolveEffectiveAppsScriptTarget(cfg).ok ||
-      session?.role === 'student'
-    ) {
+    const targetOk = resolveEffectiveAppsScriptTarget(cfg).ok;
+    if (!cfg.enabled || !targetOk) return;
+
+    if (session?.role === 'student' && !hasLockedStudentAttempt) {
       return;
     }
+
+    const intervalSeconds = hasLockedStudentAttempt
+      ? 12
+      : cfg.autoPullIntervalSeconds;
+    if (intervalSeconds < 10) {
+      return;
+    }
+
     const interval = window.setInterval(() => {
       if (
         !syncInFlightRef.current &&
@@ -1944,7 +2166,7 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
       ) {
         void pullDatabaseFromSpreadsheet(undefined, { manual: false });
       }
-    }, cfg.autoPullIntervalSeconds * 1000);
+    }, intervalSeconds * 1000);
     return () => window.clearInterval(interval);
   }, [
     db.spreadsheetSync.enabled,
@@ -1954,6 +2176,7 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
     pullDatabaseFromSpreadsheet,
     resolveEffectiveAppsScriptTarget,
     session?.role,
+    hasLockedStudentAttempt,
   ]);
 
   // Automatic Zero-Sign-In Shared Device Connection via Public School Portal (`/school_portal/sman1kabun_live`)
@@ -1976,22 +2199,39 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
         const remoteAppsScript = portal.appsScriptWebAppUrl.trim();
         const remoteSheetUrl = portal.spreadsheetUrl.trim();
         const validRemoteAppsScript = validateAppsScriptUrl(remoteAppsScript).ok;
+        const localWebAppUrl = local.spreadsheetSync.webAppUrl.trim();
         const needsUrlHydration =
-          (!local.spreadsheetSync.webAppUrl.trim() && validRemoteAppsScript) ||
-          (!local.spreadsheetSync.spreadsheetUrl.trim() && Boolean(remoteSheetUrl));
+          (validRemoteAppsScript &&
+            (!localWebAppUrl ||
+              !local.spreadsheetSync.enabled ||
+              (!hasUnpushedChangesRef.current && localWebAppUrl !== remoteAppsScript))) ||
+          (Boolean(remoteSheetUrl) &&
+            (!local.spreadsheetSync.spreadsheetUrl.trim() ||
+              (!hasUnpushedChangesRef.current &&
+                local.spreadsheetSync.spreadsheetUrl.trim() !== remoteSheetUrl)));
         const needsSchoolHydration =
           !hasUnpushedChangesRef.current &&
           local.students.length === 0 &&
           (Boolean(portal.schoolName) || (portal.classes && portal.classes.length > 0));
 
-        if (needsUrlHydration || needsSchoolHydration) {
-          const nextSyncCfg: SpreadsheetSyncConfig = {
-            ...local.spreadsheetSync,
-            enabled: local.spreadsheetSync.enabled || validRemoteAppsScript,
-            webAppUrl: local.spreadsheetSync.webAppUrl.trim() || (validRemoteAppsScript ? remoteAppsScript : ''),
-            spreadsheetUrl: local.spreadsheetSync.spreadsheetUrl.trim() || remoteSheetUrl,
-          };
+        const nextSyncCfg: SpreadsheetSyncConfig = {
+          ...local.spreadsheetSync,
+          enabled: local.spreadsheetSync.enabled || validRemoteAppsScript,
+          autoPushOnChange: validRemoteAppsScript ? true : local.spreadsheetSync.autoPushOnChange,
+          autoPullOnLoad: validRemoteAppsScript ? true : local.spreadsheetSync.autoPullOnLoad,
+          webAppUrl:
+            validRemoteAppsScript &&
+            (!localWebAppUrl || !hasUnpushedChangesRef.current)
+              ? remoteAppsScript
+              : localWebAppUrl,
+          spreadsheetUrl:
+            remoteSheetUrl &&
+            (!local.spreadsheetSync.spreadsheetUrl.trim() || !hasUnpushedChangesRef.current)
+              ? remoteSheetUrl
+              : local.spreadsheetSync.spreadsheetUrl.trim(),
+        };
 
+        if (needsUrlHydration || needsSchoolHydration) {
           commitDb(
             (prev) => {
               const mergedClasses = new Set(prev.classes);
@@ -2021,15 +2261,20 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
             },
             { triggerAutoSync: false }
           );
+        }
 
-          if (
-            nextSyncCfg.enabled &&
-            nextSyncCfg.autoPullOnLoad &&
-            !hasUnpushedChangesRef.current &&
-            !syncInFlightRef.current
-          ) {
-            void pullDatabaseFromSpreadsheet(nextSyncCfg, { manual: false });
-          }
+        // Automatically pull full database on Netlify boot once portal URL is available (no Google login needed)
+        const shouldAutoPullFromPortal =
+          !portalInitialPullDoneRef.current &&
+          nextSyncCfg.enabled &&
+          nextSyncCfg.autoPullOnLoad &&
+          validRemoteAppsScript &&
+          !hasUnpushedChangesRef.current &&
+          !syncInFlightRef.current;
+
+        if (shouldAutoPullFromPortal) {
+          portalInitialPullDoneRef.current = true;
+          void pullDatabaseFromSpreadsheet(nextSyncCfg, { manual: false });
         }
       },
       () => {
@@ -2356,10 +2601,20 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
   );
 
   const unlockOrResetAttempt = useCallback(
-    (attemptId: string, mode: 'unlock' | 'reset') => {
+    async (
+      attemptId: string,
+      mode: 'unlock' | 'reset'
+    ): Promise<{ ok: boolean; synced: boolean; message: string }> => {
+      const nowIso = new Date().toISOString();
+      const nowMs = Date.now();
+      let targetName = '';
+      let found = false;
+
       commitDb((prev) => {
         const target = prev.attempts.find((a) => a.id === attemptId);
         if (!target) return prev;
+        found = true;
+        targetName = target.studentName;
 
         if (mode === 'reset') {
           return {
@@ -2378,16 +2633,30 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
           };
         }
 
+        const pkg = prev.packages.find((p) => p.id === target.packageId);
+        const safeExtraMinutes = computeUnlockExtraMinutes(
+          target,
+          pkg?.durationMinutes ?? 60,
+          nowMs,
+          10
+        );
+
         return {
           ...prev,
           attempts: prev.attempts.map((a) =>
             a.id === attemptId
               ? {
                   ...a,
-                  status: 'in_progress',
+                  status: 'in_progress' as const,
                   lockReason: undefined,
                   submittedAt: undefined,
+                  score: undefined,
+                  correctCount: undefined,
+                  passed: undefined,
                   violationCount: 0,
+                  extraMinutes: safeExtraMinutes,
+                  unlockedAt: nowIso,
+                  updatedAt: nowIso,
                 }
               : a
           ),
@@ -2403,19 +2672,50 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
           ].slice(0, 200),
         };
       });
+
+      if (!found) {
+        return {
+          ok: false,
+          synced: false,
+          message: 'Data pengerjaan siswa tidak ditemukan.',
+        };
+      }
+
+      // Immediately push unlock/reset to Spreadsheet / Apps Script so student devices receive it right away
+      const liveCfg = dbRef.current.spreadsheetSync;
+      let synced = false;
+      if (liveCfg.enabled && resolveEffectiveAppsScriptTarget(liveCfg).ok) {
+        const pushRes = await pushDatabaseToSpreadsheet(liveCfg);
+        synced = pushRes.ok;
+      }
+
+      const baseMsg =
+        mode === 'reset'
+          ? `Riwayat ujian ${targetName} berhasil direset.`
+          : `Kunci ujian ${targetName} berhasil dibuka.`;
+      return {
+        ok: true,
+        synced,
+        message: synced
+          ? `${baseMsg} Perubahan sudah disinkronkan ke server sehingga perangkat siswa otomatis terbuka.`
+          : `${baseMsg} Tersimpan lokal dan akan segera disinkronkan ke server.`,
+      };
     },
-    [commitDb, session]
+    [commitDb, pushDatabaseToSpreadsheet, resolveEffectiveAppsScriptTarget, session]
   );
 
   const addExtraTimeToAttempt = useCallback(
     (attemptId: string, minutes: number) => {
+      const nowIso = new Date().toISOString();
       commitDb((prev) => {
         const target = prev.attempts.find((a) => a.id === attemptId);
         if (!target) return prev;
         return {
           ...prev,
           attempts: prev.attempts.map((a) =>
-            a.id === attemptId ? { ...a, extraMinutes: a.extraMinutes + minutes } : a
+            a.id === attemptId
+              ? { ...a, extraMinutes: a.extraMinutes + minutes, updatedAt: nowIso }
+              : a
           ),
           auditLogs: [
             makeAudit(
@@ -2436,14 +2736,17 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
   const startOrResumeAttempt = useCallback(
     (studentId: string, packageId: string): ExamAttempt | null => {
       const latest = dbRef.current;
-      const existing = latest.attempts.find(
-        (a) => a.studentId === studentId && a.packageId === packageId
-      );
-      if (existing) return existing;
-
       const student = latest.students.find((s) => s.id === studentId);
       const pkg = latest.packages.find((p) => p.id === packageId);
       if (!student || !pkg) return null;
+
+      const existing = findStudentPackageAttempt(
+        latest.attempts,
+        student,
+        packageId,
+        latest.security.maxViolationTolerance
+      );
+      if (existing) return existing;
 
       const pkgQuestions = latest.questions.filter((q) => q.packageId === packageId);
       const seed = `${student.nisn}-${pkg.id}`;
@@ -2553,6 +2856,79 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
     [commitDb]
   );
 
+  const upgradeAttemptEssayGradesWithAI = useCallback(
+    async (
+      attemptId: string,
+      packageQuestions: Question[],
+      answers: Record<string, StudentAnswerValue>,
+      kkm: number
+    ) => {
+      const essayItems = packageQuestions
+        .filter((q) => q.type === 'essay')
+        .map((q) => ({
+          questionId: q.id,
+          prompt: q.prompt,
+          answerKey: q.essayAnswerKey || '',
+          keywords: q.essayKeywords || [],
+          studentAnswer: typeof answers[q.id] === 'string' ? (answers[q.id] as string) : '',
+          maxPoints: q.points,
+        }))
+        .filter((item) => item.studentAnswer.trim().length > 0 && item.answerKey.trim().length > 0);
+
+      if (essayItems.length === 0) return;
+
+      try {
+        const resp = await fetch('/api/grade-essay', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: essayItems }),
+        });
+        if (!resp.ok) return;
+        const data = (await resp.json()) as {
+          ok?: boolean;
+          grades?: Record<string, EssayGradeResult>;
+        };
+        if (!data.ok || !data.grades || Object.keys(data.grades).length === 0) return;
+
+        const aiGrades = data.grades;
+        commitDb((prev) => {
+          const target = prev.attempts.find((a) => a.id === attemptId);
+          if (!target) return prev;
+          const liveQs = prev.questions.filter((q) => q.packageId === target.packageId);
+          const mergedGrades: Record<string, EssayGradeResult> = {
+            ...(target.essayGrades || {}),
+            ...aiGrades,
+          };
+          const recomputed = calculateExamScore(
+            liveQs,
+            target.answers,
+            kkm,
+            mergedGrades
+          );
+          return {
+            ...prev,
+            attempts: prev.attempts.map((a) =>
+              a.id === attemptId
+                ? {
+                    ...a,
+                    score: recomputed.score,
+                    correctCount: recomputed.correctCount,
+                    totalQuestions: recomputed.totalQuestions,
+                    passed: recomputed.passed,
+                    essayGrades: recomputed.essayGrades,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : a
+            ),
+          };
+        });
+      } catch {
+        // Fallback semantic essay score is already stored synchronously.
+      }
+    },
+    [commitDb]
+  );
+
   const recordStudentViolation = useCallback(
     (attemptId: string, type: string, detail: string) => {
       const latest = dbRef.current;
@@ -2612,16 +2988,19 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
               violationCount: liveEval.nextCount,
               status: 'locked' as const,
               submittedAt: now,
+              updatedAt: now,
               lockReason: 'Terkunci Sistem (Indikasi Kecurangan)',
               score: summary.score,
               correctCount: summary.correctCount,
               totalQuestions: summary.totalQuestions,
               passed: summary.passed,
+              essayGrades: summary.essayGrades,
             };
           }
           return {
             ...a,
             violationCount: liveEval.nextCount,
+            updatedAt: now,
           };
         });
 
@@ -2651,6 +3030,24 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
           'Batas toleransi pelanggaran terlampaui. Jawaban Anda disimpan otomatis.',
           880
         );
+        const lockedAttempt = dbRef.current.attempts.find((a) => a.id === attemptId);
+        if (lockedAttempt) {
+          const lockedQs = dbRef.current.questions.filter(
+            (q) => q.packageId === lockedAttempt.packageId
+          );
+          if (lockedQs.some((q) => q.type === 'essay')) {
+            void upgradeAttemptEssayGradesWithAI(
+              attemptId,
+              lockedQs,
+              lockedAttempt.answers,
+              pkg?.kkm ?? 75
+            );
+          }
+        }
+        const liveCfg = dbRef.current.spreadsheetSync;
+        if (liveCfg.enabled && resolveEffectiveAppsScriptTarget(liveCfg).ok) {
+          void pushDatabaseToSpreadsheet(liveCfg);
+        }
       }
 
       return {
@@ -2659,7 +3056,13 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
         remainingBeforeLock: evaluation.remainingBeforeLock,
       };
     },
-    [commitDb, showTransitionLoader]
+    [
+      commitDb,
+      pushDatabaseToSpreadsheet,
+      resolveEffectiveAppsScriptTarget,
+      showTransitionLoader,
+      upgradeAttemptEssayGradesWithAI,
+    ]
   );
 
   const submitStudentExam = useCallback(
@@ -2699,6 +3102,7 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
         correctCount: initialSummary.correctCount,
         totalQuestions: initialSummary.totalQuestions,
         passed: initialSummary.passed,
+        essayGrades: initialSummary.essayGrades,
       };
 
       commitDb((prev) => {
@@ -2717,11 +3121,13 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
           ...liveTarget,
           status: lockReason ? 'locked' : 'completed',
           submittedAt: now,
+          updatedAt: now,
           lockReason,
           score: liveSummary.score,
           correctCount: liveSummary.correctCount,
           totalQuestions: liveSummary.totalQuestions,
           passed: liveSummary.passed,
+          essayGrades: liveSummary.essayGrades,
         };
         return {
           ...prev,
@@ -2743,9 +3149,29 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
         };
       });
 
+      if (qs.some((q) => q.type === 'essay')) {
+        void upgradeAttemptEssayGradesWithAI(
+          attemptId,
+          qs,
+          finalCompleted.answers,
+          pkg?.kkm ?? 75
+        );
+      }
+
+      const liveCfg = dbRef.current.spreadsheetSync;
+      if (liveCfg.enabled && resolveEffectiveAppsScriptTarget(liveCfg).ok) {
+        void pushDatabaseToSpreadsheet(liveCfg);
+      }
+
       return finalCompleted;
     },
-    [commitDb, showTransitionLoader]
+    [
+      commitDb,
+      pushDatabaseToSpreadsheet,
+      resolveEffectiveAppsScriptTarget,
+      showTransitionLoader,
+      upgradeAttemptEssayGradesWithAI,
+    ]
   );
 
   return (
@@ -2783,6 +3209,8 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
         importDatabaseJSON,
         resetAllData,
         deleteSelectedData,
+        deleteViolationLogs,
+        deleteAuditLogs,
         syncRuntime,
         serverAutoSyncStatus,
         firestoreAutoSync,
@@ -2791,9 +3219,11 @@ export function CBTProvider({ children }: { children: React.ReactNode }) {
         pushDatabaseToSpreadsheet,
         pullDatabaseFromSpreadsheet,
         upsertExamPackage,
+        togglePackagePublished,
         deleteExamPackage,
         upsertQuestion,
         deleteQuestion,
+        autoBalancePackagePoints,
         bulkAddQuestions,
         bulkUpdateQuestions,
         applyQuestionWeightDistribution,

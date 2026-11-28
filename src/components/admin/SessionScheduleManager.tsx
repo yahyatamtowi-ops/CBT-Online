@@ -3,7 +3,7 @@ import { AlertOctagon, Clock, KeyRound, Power, ShieldCheck } from 'lucide-react'
 import { useCBT } from '../../context/CBTContext';
 
 export function SessionScheduleManager() {
-  const { db, updateScheduleConfig, forceFinishAllExams } = useCBT();
+  const { db, updateScheduleConfig, forceFinishAllExams, togglePackagePublished } = useCBT();
   const [confirmForceOpen, setConfirmForceOpen] = useState(false);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
 
@@ -128,31 +128,70 @@ export function SessionScheduleManager() {
 
           {/* Active tokens preview */}
           <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
-            <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">
-              Token Paket Ujian Terdaftar
-            </p>
+            <div className="flex items-center justify-between gap-2 mb-2.5">
+              <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Token Paket Ujian Terdaftar ({db.packages.length})
+              </p>
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                Aktif: {db.packages.filter((p) => p.isPublished).length}/{db.packages.length}
+              </span>
+            </div>
             {db.packages.length === 0 ? (
               <p className="text-xs text-slate-500 dark:text-slate-400 py-3">
                 Belum ada paket ujian yang dibuat oleh guru.
               </p>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2" data-testid="registered-packages-list">
                 {db.packages.map((pkg) => (
                   <div
                     key={pkg.id}
-                    className="flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 px-3.5 py-2 text-xs"
+                    data-testid={`schedule-pkg-row-${pkg.id}`}
+                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 px-3.5 py-2.5 text-xs"
                   >
-                    <div className="min-w-0">
-                      <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
-                        {pkg.title}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                          {pkg.title}
+                        </span>
+                        <span
+                          className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                            pkg.isPublished
+                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300'
+                              : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+                          }`}
+                        >
+                          {pkg.isPublished ? 'Aktif' : 'Nonaktif'}
+                        </span>
                       </div>
-                      <div className="text-slate-500 dark:text-slate-400">
-                        {pkg.subject} · {pkg.targetClasses.join(', ')}
+                      <div className="mt-0.5 text-slate-500 dark:text-slate-400 truncate">
+                        {pkg.subject} · {pkg.targetClasses.join(', ') || 'Semua Kelas'}
                       </div>
                     </div>
-                    <span className="ml-3 font-mono font-bold text-indigo-700 dark:text-indigo-400 tracking-wider shrink-0">
-                      {pkg.token}
-                    </span>
+                    <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0">
+                      <span className="font-mono font-bold text-indigo-700 dark:text-indigo-400 tracking-wider">
+                        {pkg.token}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`toggle-pkg-active-${pkg.id}`}
+                        aria-label={`${pkg.isPublished ? 'Nonaktifkan' : 'Aktifkan'} paket ${pkg.title}`}
+                        onClick={() => {
+                          const nextState = !pkg.isPublished;
+                          togglePackagePublished(pkg.id);
+                          setStatusNotice(
+                            `Paket "${pkg.title}" berhasil ${nextState ? 'diaktifkan' : 'dinonaktifkan'}.`
+                          );
+                        }}
+                        className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                          pkg.isPublished
+                            ? 'border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/50'
+                            : 'border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50'
+                        }`}
+                      >
+                        <Power className="h-3 w-3" />
+                        <span>{pkg.isPublished ? 'Nonaktifkan' : 'Aktifkan'}</span>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

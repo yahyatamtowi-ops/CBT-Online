@@ -19,6 +19,7 @@ const TYPE_LABELS: Record<QuestionType, string> = {
   multiple_choice: 'PG Kompleks',
   matching: 'Menjodohkan',
   true_false: 'Benar / Salah',
+  essay: 'Soal Esai',
 };
 
 interface WeightSettingsPanelProps {
@@ -45,6 +46,7 @@ export function WeightSettingsPanel({
     multiple_choice: 4,
     matching: 5,
     true_false: 2,
+    essay: 10,
   });
 
   const activeTargetIds =
@@ -80,6 +82,7 @@ export function WeightSettingsPanel({
       multiple_choice: 0,
       matching: 0,
       true_false: 0,
+      essay: 0,
     };
     const scoped = activeTargetIds
       ? questions.filter((q) => activeTargetIds.includes(q.id))
@@ -221,9 +224,9 @@ export function WeightSettingsPanel({
       )}
 
       {mode === 'by_type' && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 p-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 p-4">
           {(
-            ['single_choice', 'multiple_choice', 'matching', 'true_false'] as QuestionType[]
+            ['single_choice', 'multiple_choice', 'matching', 'true_false', 'essay'] as QuestionType[]
           ).map((typeKey) => (
             <div key={typeKey}>
               <label
@@ -298,6 +301,7 @@ interface CollectiveEditRow {
   correctOptionId?: string;
   correctOptionIds?: string[];
   correctBoolean?: boolean;
+  essayAnswerKey?: string;
   options?: Question['options'];
 }
 
@@ -322,6 +326,7 @@ export function CollectiveQuestionEditor({
       correctOptionId: q.correctOptionId,
       correctOptionIds: q.correctOptionIds ? [...q.correctOptionIds] : undefined,
       correctBoolean: q.correctBoolean,
+      essayAnswerKey: q.essayAnswerKey || '',
       options: q.options ? q.options.map((o) => ({ ...o })) : undefined,
     }))
   );
@@ -425,6 +430,7 @@ export function CollectiveQuestionEditor({
         correctOptionId: safeSingleKey,
         correctOptionIds: safeMultiKeys,
         correctBoolean: r.correctBoolean,
+        essayAnswerKey: r.type === 'essay' ? r.essayAnswerKey : undefined,
         options: finalOptions,
       };
     });
@@ -621,6 +627,26 @@ export function CollectiveQuestionEditor({
                 />
               </div>
             </div>
+
+            {row.type === 'essay' && (
+              <div>
+                <label
+                  htmlFor={`col-essay-key-${row.id}`}
+                  className="block text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 mb-1"
+                >
+                  Kunci Jawaban Esai (Acuan Makna Koreksi Otomatis)
+                </label>
+                <textarea
+                  id={`col-essay-key-${row.id}`}
+                  rows={2}
+                  value={row.essayAnswerKey || ''}
+                  onChange={(e) =>
+                    updateRow(row.id, { essayAnswerKey: e.target.value })
+                  }
+                  className="w-full rounded-lg border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:border-emerald-600 focus:outline-none"
+                />
+              </div>
+            )}
 
             {/* Expandable Inline Options Editor */}
             {row.options && row.options.length > 0 && (

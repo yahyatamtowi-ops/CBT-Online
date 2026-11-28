@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { useCBT } from '../../context/CBTContext';
 import { SchoolLogo } from '../LandingPortal';
+import { ScrollToTopButton } from '../ScrollToTopButton';
+import { FullscreenToggleButton } from '../FullscreenToggleButton';
 import { AdminDashboard } from './AdminDashboard';
 import { AuditBackupPanel } from './AuditBackupPanel';
 import { GlobalSecuritySettings } from './GlobalSecuritySettings';
@@ -125,7 +127,7 @@ export function AdminPortal() {
 
       {/* Main Content */}
       <div className="flex flex-1 flex-col min-w-0">
-        <header className="flex items-center justify-between gap-3 border-b border-slate-200/90 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm px-4 py-3 sm:px-6">
+        <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-slate-200/90 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm px-4 py-3 sm:px-6">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="lg:hidden shrink-0">
               <SchoolLogo
@@ -143,14 +145,17 @@ export function AdminPortal() {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={logout}
-            className="lg:hidden inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 whitespace-nowrap"
-          >
-            <LogOut className="h-3.5 w-3.5" />
-            <span>Keluar</span>
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <FullscreenToggleButton variant="header" />
+            <button
+              type="button"
+              onClick={logout}
+              className="lg:hidden inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 whitespace-nowrap"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span>Keluar</span>
+            </button>
+          </div>
         </header>
 
         <main className="flex-1 p-4 pb-24 sm:p-6 sm:pb-24 lg:p-8 lg:pb-8 max-w-7xl w-full mx-auto">
@@ -201,6 +206,7 @@ export function AdminPortal() {
           })}
         </div>
       </nav>
+      <ScrollToTopButton />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type {
+  EssayGradeResult,
   ExamAttempt,
   ExamPackage,
   GlobalSecurityConfig,
@@ -8,6 +9,9 @@ import type {
   StudentAttemptStatus,
   StudentRecord,
 } from '../types/cbt';
+
+export const MIN_ESSAY_QUESTIONS = 5;
+export const MAX_ESSAY_QUESTIONS = 10;
 
 /**
  * Deterministic PRNG (Mulberry32) so question/option shuffling stays stable per attempt.
@@ -35,6 +39,398 @@ export function seededShuffle<T>(items: T[], seedStr: string): T[] {
   return arr;
 }
 
+const INDONESIAN_STOPWORDS = new Set([
+  'yang', 'dan', 'di', 'ke', 'dari', 'pada', 'adalah', 'merupakan', 'yaitu',
+  'yakni', 'untuk', 'dengan', 'atau', 'sebagai', 'dalam', 'karena', 'sebab',
+  'oleh', 'sehingga', 'akan', 'dapat', 'bisa', 'ini', 'itu', 'tersebut',
+  'sebuah', 'suatu', 'jika', 'bila', 'apabila', 'maka', 'agar', 'supaya',
+  'juga', 'serta', 'secara', 'hal', 'telah', 'sudah', 'harus', 'wajib',
+  'lebih', 'sangat', 'paling', 'antara', 'terhadap', 'melalui', 'saat',
+  'ketika', 'bahwa', 'hingga', 'sampai', 'adanya', 'para', 'setiap', 'semua',
+  'bagi', 'namun', 'tetapi', 'tapi', 'hanya', 'saja', 'pun', 'lah', 'kah',
+  'nya', 'mereka', 'kita', 'kami', 'anda', 'kamu', 'saya', 'aku', 'dia', 'ia',
+  'ada', 'terjadi', 'menjadi', 'memiliki', 'punya', 'seperti', 'misalnya',
+  'contohnya', 'yaitu', 'ialah', 'berupa', 'tentang', 'mengenai', 'atas',
+]);
+
+// Canonical concept groups so different Indonesian diction expressing the same meaning matches semantically
+const INDONESIAN_SYNONYM_GROUPS: string[][] = [
+  ['naik', 'tingkat', 'tambah', 'lonjak', 'lambung', 'kembang', 'tumbuh', 'tinggi', 'besar', 'ekspansi', 'eskalasi'],
+  ['turun', 'kurang', 'susut', 'merosot', 'rendah', 'kecil', 'minim', 'menyempit', 'deflasi'],
+  ['sebab', 'akibat', 'picu', 'timbul', 'dampak', 'pengaruh', 'faktor', 'alasan', 'konsekuensi', 'efek'],
+  ['proses', 'tahap', 'mekanisme', 'cara', 'langkah', 'urutan', 'siklus', 'jalur', 'alur'],
+  ['energi', 'tenaga', 'daya', 'kekuatan', 'kalori', 'atp'],
+  ['cahaya', 'sinar', 'matahari', 'surya', 'foton', 'terang'],
+  ['oksigen', 'o2', 'udara'],
+  ['karbondioksida', 'co2', 'karbon'],
+  ['air', 'h2o', 'cairan', 'mineral'],
+  ['glukosa', 'gula', 'karbohidrat', 'amilum', 'zatmakanan', 'nutrisi', 'makanan'],
+  ['tumbuhan', 'tanaman', 'flora', 'pohon', 'hijau', 'daun', 'klorofil'],
+  ['hewan', 'binatang', 'fauna', 'satwa'],
+  ['manusia', 'orang', 'individu', 'masyarakat', 'warga', 'penduduk', 'rakyat'],
+  ['fungsi', 'peran', 'guna', 'manfaat', 'tugas', 'khasiat', 'faedah'],
+  ['tujuan', 'sasaran', 'maksud', 'target', 'visi', 'orientasi'],
+  ['hasil', 'produk', 'keluaran', 'cipta', 'buat', 'bentuk', 'produksi', 'sintesis'],
+  ['ubah', 'transformasi', 'ganti', 'konversi', 'alih', 'mutasi', 'modifikasi'],
+  ['cepat', 'laju', 'akselerasi', 'kecepatan', 'kelajuan'],
+  ['gaya', 'dorong', 'tarik', 'tekan', 'beban'],
+  ['panas', 'kalor', 'suhu', 'temperatur', 'termal', 'hangat'],
+  ['negara', 'pemerintah', 'bangsa', 'nasional', 'penguasa'],
+  ['hukum', 'atur', 'peraturan', 'undang', 'norma', 'kaidah', 'regulasi', 'ketentuan'],
+  ['ekonomi', 'uang', 'dagang', 'pasar', 'finansial', 'niaga', 'bisnis'],
+  ['penting', 'utama', 'pokok', 'vital', 'krusial', 'esensial', 'primer', 'inti', 'dasar'],
+  ['jaga', 'lindung', 'pelihara', 'lestari', 'rawat', 'pertahan', 'aman'],
+  ['hambat', 'cegah', 'tahan', 'halang', 'kendala', 'batasi', 'stop'],
+  ['dukung', 'bantu', 'dorong', 'topang', 'fasilitasi', 'sokong'],
+  ['hubung', 'interaksi', 'relasi', 'kait', 'timbal', 'komunikasi'],
+  ['fotosintesis', 'asimilasi'],
+  ['respirasi', 'napas', 'pernapasan', 'oksidasi', 'bakar'],
+  ['uap', 'evaporasi', 'menguap', 'penguapan'],
+  ['embun', 'kondensasi', 'mengembun', 'pengembunan'],
+  ['hujan', 'presipitasi', 'curah'],
+  ['demokrasi', 'kedaulatan', 'musyawarah', 'aspirasi'],
+  ['merdeka', 'proklamasi', 'bebas', 'berdaulat', 'lepas'],
+  ['inflasi', 'mahal'],
+  ['harga', 'tarif', 'biaya', 'ongkos', 'nilai'],
+  ['barang', 'produk', 'komoditas', 'benda', 'materi', 'objek'],
+  ['umum', 'meluas', 'luas', 'menyeluruh', 'merata', 'keseluruhan', 'kolektif', 'masif'],
+  ['waktu', 'jangka', 'periode', 'masa', 'tempo', 'durasi', 'berlangsung', 'kurun'],
+  ['terus', 'menerus', 'kontinu', 'berkelanjutan', 'berkepanjangan', 'berturut', 'konstan'],
+  ['sama', 'setara', 'seimbang', 'identik', 'serupa', 'adil'],
+  ['beda', 'variasi', 'ragam', 'lain', 'divergen', 'kontras'],
+  ['tidak', 'bukan', 'tanpa', 'tiada', 'nol', 'hilang', 'negatif'],
+  ['positif', 'baik', 'untung', 'optimal', 'efektif', 'efisien'],
+  ['buruk', 'rugi', 'negatif', 'rusak', 'bahaya', 'cemar', 'polusi'],
+  ['organel', 'mitokondria', 'kloroplas', 'ribosom', 'inti', 'nukleus'],
+  ['gerak', 'pindah', 'geser', 'alir', 'arus', 'mobilitas'],
+  ['massa', 'berat', 'bobot', 'muatan'],
+  ['volume', 'isi', 'ruang', 'kapasitas'],
+  ['listrik', 'arus', 'tegangan', 'volt', 'ampere', 'elektron'],
+  ['magnet', 'medan', 'kutub', 'induksi'],
+  ['sosial', 'budaya', 'kultur', 'adat', 'tradisi', 'kebiasaan'],
+  ['sejarah', 'lampau', 'peristiwa', 'kronologi', 'zaman'],
+];
+
+const SYNONYM_TO_CANONICAL = new Map<string, string>();
+for (const group of INDONESIAN_SYNONYM_GROUPS) {
+  const canonical = group[0];
+  for (const word of group) {
+    SYNONYM_TO_CANONICAL.set(word, canonical);
+  }
+}
+
+function stemIndonesianToken(raw: string): string {
+  let w = raw.toLowerCase().trim();
+  if (w.length <= 3) return w;
+
+  // Strip common particles & possessive suffixes
+  w = w.replace(/(lah|kah|tah|pun)$/, '');
+  if (w.length > 4) w = w.replace(/(nya|ku|mu)$/, '');
+
+  // Strip derivational suffixes
+  if (w.length > 5 && w.endsWith('kan')) w = w.slice(0, -3);
+  else if (w.length > 4 && w.endsWith('an')) w = w.slice(0, -2);
+  else if (w.length > 4 && w.endsWith('i') && !w.endsWith('asi') && !w.endsWith('ogi')) {
+    w = w.slice(0, -1);
+  }
+
+  // Strip common Indonesian prefixes while keeping meaningful root
+  const prefixes = ['meng', 'meny', 'mem', 'men', 'peng', 'peny', 'pem', 'pen', 'ber', 'ter', 'per', 'me', 'pe', 'di', 'ke', 'se'];
+  for (const pre of prefixes) {
+    if (w.startsWith(pre) && w.length - pre.length >= 3) {
+      w = w.slice(pre.length);
+      break;
+    }
+  }
+  return w;
+}
+
+function canonicalizeToken(raw: string): string {
+  const lower = raw.toLowerCase();
+  const direct = SYNONYM_TO_CANONICAL.get(lower);
+  if (direct) return direct;
+  const stemmed = stemIndonesianToken(lower);
+  const byStem = SYNONYM_TO_CANONICAL.get(stemmed);
+  if (byStem) return byStem;
+  // Also check prefix match against synonym keys for inflected forms (e.g., "menghasilkan" -> "hasil")
+  for (const [key, canonical] of SYNONYM_TO_CANONICAL.entries()) {
+    if (key.length >= 4 && (lower.includes(key) || stemmed.includes(key))) {
+      return canonical;
+    }
+  }
+  return stemmed;
+}
+
+function normalizeEssayText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/karbon\s+dioksida/g, 'karbondioksida')
+    .replace(/zat\s+makanan/g, 'zatmakanan')
+    .replace(/[^a-z0-9\s²³°%+-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractSemanticTokens(text: string): { rawTokens: string[]; concepts: string[] } {
+  const normalized = normalizeEssayText(text);
+  if (!normalized) return { rawTokens: [], concepts: [] };
+  const parts = normalized
+    .split(' ')
+    .filter((w) => w.length >= 2 && !INDONESIAN_STOPWORDS.has(w));
+  const concepts = parts.map(canonicalizeToken).filter((c) => c.length >= 2);
+  return { rawTokens: parts, concepts };
+}
+
+function levenshteinSimilarity(a: string, b: string): number {
+  if (a === b) return 1;
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 1;
+  if (Math.abs(a.length - b.length) > Math.ceil(maxLen * 0.45)) return 0;
+
+  const prev = new Array<number>(b.length + 1);
+  const curr = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j += 1) prev[j] = j;
+
+  for (let i = 1; i <= a.length; i += 1) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= b.length; j += 1) prev[j] = curr[j];
+  }
+  return 1 - prev[b.length] / maxLen;
+}
+
+/**
+ * Deterministic Indonesian semantic essay evaluator.
+ * Awards proportional points (0..maxPoints) based on conceptual & synonym equivalence
+ * even when student uses different diction or sentence structure with the same meaning.
+ */
+export function evaluateEssayAnswerSemantic(
+  studentAnswer: string,
+  answerKey: string,
+  keywords: string[] = [],
+  maxPoints = 10
+): EssayGradeResult & { isCorrect: boolean } {
+  const safeMax = maxPoints > 0 ? maxPoints : 10;
+  const cleanStudent = (studentAnswer || '').trim();
+  const cleanKey = (answerKey || '').trim();
+
+  if (!cleanStudent) {
+    return {
+      isCorrect: false,
+      scoreRatio: 0,
+      earnedPoints: 0,
+      maxPoints: safeMax,
+      matchPercent: 0,
+      feedback: 'Jawaban esai belum diisi.',
+      gradedBy: 'semantic_local',
+    };
+  }
+
+  // Exact or near-exact normalized match -> 100%
+  const normStudent = normalizeEssayText(cleanStudent);
+  const normKey = normalizeEssayText(cleanKey);
+  if (normKey && normStudent === normKey) {
+    return {
+      isCorrect: true,
+      scoreRatio: 1,
+      earnedPoints: Number(safeMax.toFixed(2)),
+      maxPoints: safeMax,
+      matchPercent: 100,
+      feedback: 'Sangat tepat — jawaban sesuai penuh dengan kunci jawaban.',
+      gradedBy: 'semantic_local',
+    };
+  }
+
+  const stuTok = extractSemanticTokens(cleanStudent);
+  const keyTok = extractSemanticTokens(cleanKey);
+
+  if (stuTok.concepts.length === 0) {
+    return {
+      isCorrect: false,
+      scoreRatio: 0,
+      earnedPoints: 0,
+      maxPoints: safeMax,
+      matchPercent: 0,
+      feedback: 'Jawaban terlalu singkat dan belum mengandung konsep inti.',
+      gradedBy: 'semantic_local',
+    };
+  }
+
+  // Build unique concept set for key & student
+  const keyConcepts = [...new Set(keyTok.concepts)];
+  const stuConcepts = [...new Set(stuTok.concepts)];
+
+  // 1. Concept recall with synonym & fuzzy tolerance (handles paraphrased diction + minor typos)
+  let matchedConceptScore = 0;
+  for (const kc of keyConcepts) {
+    if (stuConcepts.includes(kc)) {
+      matchedConceptScore += 1;
+    } else {
+      let bestFuzzy = 0;
+      for (const sc of stuConcepts) {
+        if (sc.length >= 4 && kc.length >= 4 && (sc.includes(kc) || kc.includes(sc))) {
+          bestFuzzy = Math.max(bestFuzzy, 0.92);
+        } else {
+          const sim = levenshteinSimilarity(kc, sc);
+          if (sim >= 0.78) bestFuzzy = Math.max(bestFuzzy, sim);
+        }
+      }
+      matchedConceptScore += bestFuzzy;
+    }
+  }
+  const conceptRecall =
+    keyConcepts.length > 0 ? Math.min(1, matchedConceptScore / keyConcepts.length) : 0;
+
+  // 2. Explicit teacher keywords recall (phrases or individual key terms)
+  const cleanKeywords = (keywords || []).map((k) => k.trim()).filter(Boolean);
+  let keywordRecall = conceptRecall;
+  if (cleanKeywords.length > 0) {
+    let kwMatched = 0;
+    for (const kw of cleanKeywords) {
+      const kwExtracted = extractSemanticTokens(kw);
+      if (kwExtracted.concepts.length === 0) continue;
+      let hitParts = 0;
+      for (const kc of kwExtracted.concepts) {
+        if (
+          stuConcepts.includes(kc) ||
+          stuConcepts.some((sc) => levenshteinSimilarity(kc, sc) >= 0.8)
+        ) {
+          hitParts += 1;
+        }
+      }
+      kwMatched += hitParts / kwExtracted.concepts.length;
+    }
+    keywordRecall = Math.min(1, kwMatched / cleanKeywords.length);
+  }
+
+  // 3. Precision / relevance guard (prevents keyword stuffing or copying unrelated paragraphs)
+  let stuRelevant = 0;
+  const referenceConcepts = new Set([
+    ...keyConcepts,
+    ...cleanKeywords.flatMap((kw) => extractSemanticTokens(kw).concepts),
+  ]);
+  for (const sc of stuConcepts) {
+    if (
+      referenceConcepts.has(sc) ||
+      [...referenceConcepts].some((rc) => levenshteinSimilarity(sc, rc) >= 0.8)
+    ) {
+      stuRelevant += 1;
+    }
+  }
+  const precision = stuConcepts.length > 0 ? stuRelevant / stuConcepts.length : 0;
+  const f1Score =
+    conceptRecall + precision > 0
+      ? (2 * conceptRecall * precision) / (conceptRecall + precision)
+      : 0;
+
+  // Weighted semantic score: prioritizes conveying all required meanings even with extra explanatory words
+  let rawRatio =
+    cleanKeywords.length > 0
+      ? conceptRecall * 0.45 + keywordRecall * 0.4 + f1Score * 0.15
+      : conceptRecall * 0.75 + f1Score * 0.25;
+
+  // Boost genuinely complete paraphrased answers (high concept/keyword recall >= 0.82 -> full or near-full score)
+  if (conceptRecall >= 0.85 && (cleanKeywords.length === 0 || keywordRecall >= 0.8)) {
+    rawRatio = Math.min(1, Math.max(rawRatio, 0.95));
+  } else if (conceptRecall >= 0.72 && (cleanKeywords.length === 0 || keywordRecall >= 0.7)) {
+    rawRatio = Math.min(1, Math.max(rawRatio, 0.82));
+  }
+
+  // Guard against ultra-short 1-word guess when answer key requires multi-concept explanation
+  if (keyConcepts.length >= 4 && stuTok.rawTokens.length <= 1) {
+    rawRatio = Math.min(rawRatio, 0.25);
+  }
+
+  const scoreRatio = Math.max(0, Math.min(1, Number(rawRatio.toFixed(4))));
+  const matchPercent = Math.round(scoreRatio * 100);
+  const earnedPoints = Number((scoreRatio * safeMax).toFixed(2));
+  const isCorrect = scoreRatio >= 0.65;
+
+  let feedback = 'Jawaban belum sesuai dengan konsep utama pada kunci jawaban.';
+  if (matchPercent >= 88) {
+    feedback = 'Sangat tepat — makna dan konsep jawaban sesuai penuh dengan kunci.';
+  } else if (matchPercent >= 65) {
+    feedback = 'Baik — inti makna sesuai dengan kunci meskipun menggunakan diksi berbeda.';
+  } else if (matchPercent >= 35) {
+    feedback = 'Cukup — sebagian poin konsep sudah tepat namun penjelasan belum lengkap.';
+  }
+
+  return {
+    isCorrect,
+    scoreRatio,
+    earnedPoints,
+    maxPoints: safeMax,
+    matchPercent,
+    feedback,
+    gradedBy: 'semantic_local',
+  };
+}
+
+export interface EssayLimitValidation {
+  essayCount: number;
+  min: number;
+  max: number;
+  canAddMore: boolean;
+  isUnderMin: boolean;
+  isAtMax: boolean;
+  isValidRange: boolean;
+  statusMessage: string;
+}
+
+export function validateEssayQuestionLimit(
+  questions: Question[],
+  packageId: string
+): EssayLimitValidation {
+  const essayCount = questions.filter(
+    (q) => q.packageId === packageId && q.type === 'essay'
+  ).length;
+  const isUnderMin = essayCount > 0 && essayCount < MIN_ESSAY_QUESTIONS;
+  const isAtMax = essayCount >= MAX_ESSAY_QUESTIONS;
+  const isValidRange =
+    essayCount === 0 ||
+    (essayCount >= MIN_ESSAY_QUESTIONS && essayCount <= MAX_ESSAY_QUESTIONS);
+
+  let statusMessage = `Belum ada soal esai (batas paket esai: ${MIN_ESSAY_QUESTIONS}–${MAX_ESSAY_QUESTIONS} soal).`;
+  if (isUnderMin) {
+    statusMessage = `Saat ini ${essayCount} soal esai. Tambahkan minimal ${
+      MIN_ESSAY_QUESTIONS - essayCount
+    } soal esai lagi (minimal ${MIN_ESSAY_QUESTIONS}, maksimal ${MAX_ESSAY_QUESTIONS} soal).`;
+  } else if (isAtMax) {
+    statusMessage = `Batas maksimal ${MAX_ESSAY_QUESTIONS} soal esai pada paket ini telah tercapai.`;
+  } else if (essayCount >= MIN_ESSAY_QUESTIONS) {
+    statusMessage = `${essayCount} dari ${MAX_ESSAY_QUESTIONS} soal esai aktif (memenuhi syarat minimal ${MIN_ESSAY_QUESTIONS} soal).`;
+  }
+
+  return {
+    essayCount,
+    min: MIN_ESSAY_QUESTIONS,
+    max: MAX_ESSAY_QUESTIONS,
+    canAddMore: essayCount < MAX_ESSAY_QUESTIONS,
+    isUnderMin,
+    isAtMax,
+    isValidRange,
+    statusMessage,
+  };
+}
+
+export function autoDistributePackagePoints(
+  allQuestions: Question[],
+  packageId: string,
+  targetTotal = 100
+): Question[] {
+  const pkgQs = allQuestions.filter((q) => q.packageId === packageId);
+  if (pkgQs.length === 0) return allQuestions;
+  const redistributed = distributeQuestionWeights(pkgQs, {
+    mode: 'equal_target',
+    targetTotal,
+  });
+  const byId = new Map(redistributed.map((q) => [q.id, q]));
+  return allQuestions.map((q) => byId.get(q.id) || q);
+}
+
 export function isQuestionAnswered(
   question: Question,
   answer: StudentAnswerValue | undefined
@@ -47,6 +443,8 @@ export function isQuestionAnswered(
       return Array.isArray(answer) && answer.length > 0;
     case 'true_false':
       return typeof answer === 'boolean';
+    case 'essay':
+      return typeof answer === 'string' && answer.trim().length > 0;
     case 'matching': {
       if (typeof answer !== 'object' || Array.isArray(answer)) return false;
       const pairs = question.matchingPairs ?? [];
@@ -62,8 +460,14 @@ export function isQuestionAnswered(
 
 export function evaluateQuestionCorrectness(
   question: Question,
-  answer: StudentAnswerValue | undefined
-): { isCorrect: boolean; earnedPoints: number; maxPoints: number } {
+  answer: StudentAnswerValue | undefined,
+  essayGradeOverride?: EssayGradeResult
+): {
+  isCorrect: boolean;
+  earnedPoints: number;
+  maxPoints: number;
+  essayGrade?: EssayGradeResult;
+} {
   const maxPoints = question.points > 0 ? question.points : 10;
   if (answer === undefined || answer === null) {
     return { isCorrect: false, earnedPoints: 0, maxPoints };
@@ -108,6 +512,43 @@ export function evaluateQuestionCorrectness(
       const earnedPoints = Number(((matchedCount / pairs.length) * maxPoints).toFixed(2));
       return { isCorrect, earnedPoints, maxPoints };
     }
+    case 'essay': {
+      const text = typeof answer === 'string' ? answer : '';
+      if (essayGradeOverride) {
+        const clampedRatio = Math.max(0, Math.min(1, essayGradeOverride.scoreRatio));
+        const earned = Number((clampedRatio * maxPoints).toFixed(2));
+        return {
+          isCorrect: clampedRatio >= 0.65,
+          earnedPoints: earned,
+          maxPoints,
+          essayGrade: {
+            ...essayGradeOverride,
+            earnedPoints: earned,
+            maxPoints,
+            matchPercent: Math.round(clampedRatio * 100),
+          },
+        };
+      }
+      const semantic = evaluateEssayAnswerSemantic(
+        text,
+        question.essayAnswerKey || question.explanation || '',
+        question.essayKeywords || [],
+        maxPoints
+      );
+      return {
+        isCorrect: semantic.isCorrect,
+        earnedPoints: semantic.earnedPoints,
+        maxPoints,
+        essayGrade: {
+          scoreRatio: semantic.scoreRatio,
+          earnedPoints: semantic.earnedPoints,
+          maxPoints: semantic.maxPoints,
+          matchPercent: semantic.matchPercent,
+          feedback: semantic.feedback,
+          gradedBy: semantic.gradedBy,
+        },
+      };
+    }
     default:
       return { isCorrect: false, earnedPoints: 0, maxPoints };
   }
@@ -120,12 +561,14 @@ export interface ExamScoreSummary {
   correctCount: number;
   totalQuestions: number;
   passed: boolean;
+  essayGrades: Record<string, EssayGradeResult>;
 }
 
 export function calculateExamScore(
   questions: Question[],
   answers: Record<string, StudentAnswerValue>,
-  kkm: number
+  kkm: number,
+  existingEssayGrades?: Record<string, EssayGradeResult>
 ): ExamScoreSummary {
   if (questions.length === 0) {
     return {
@@ -135,19 +578,28 @@ export function calculateExamScore(
       correctCount: 0,
       totalQuestions: 0,
       passed: false,
+      essayGrades: {},
     };
   }
 
   let earnedPoints = 0;
   let totalPoints = 0;
   let correctCount = 0;
+  const essayGrades: Record<string, EssayGradeResult> = {};
 
   for (const q of questions) {
-    const result = evaluateQuestionCorrectness(q, answers[q.id]);
+    const result = evaluateQuestionCorrectness(
+      q,
+      answers[q.id],
+      existingEssayGrades?.[q.id]
+    );
     earnedPoints += result.earnedPoints;
     totalPoints += result.maxPoints;
     if (result.isCorrect) {
       correctCount += 1;
+    }
+    if (q.type === 'essay' && result.essayGrade) {
+      essayGrades[q.id] = result.essayGrade;
     }
   }
 
@@ -161,6 +613,7 @@ export function calculateExamScore(
     correctCount,
     totalQuestions: questions.length,
     passed: score >= kkm,
+    essayGrades,
   };
 }
 
@@ -194,7 +647,7 @@ export function computeItemAnalysis(
       if (isQuestionAnswered(q, ans)) {
         answeredCount += 1;
       }
-      const res = evaluateQuestionCorrectness(q, ans);
+      const res = evaluateQuestionCorrectness(q, ans, attempt.essayGrades?.[q.id]);
       if (res.isCorrect) {
         correctCount += 1;
       } else {
@@ -296,6 +749,24 @@ export function lookupStudentAvailableTokens(params: {
   }
 
   const scheduleCheck = isWithinScheduleWindow(params.schedule, params.now);
+
+  const classPackages = params.packages.filter(
+    (p) =>
+      p.isPublished &&
+      (p.targetClasses.length === 0 ||
+        p.targetClasses.includes(student.className))
+  );
+
+  // Packages explicitly activated by subject teacher (`allowIndependentAccess: true`) remain accessible
+  // whenever the teacher activates them for Ulangan, Latihan, or UTS.
+  const availablePackages = scheduleCheck.allowed
+    ? classPackages
+    : classPackages.filter((p) => p.allowIndependentAccess === true);
+
+  if (availablePackages.length > 0) {
+    return { status: 'ready', student, packages: availablePackages };
+  }
+
   if (!scheduleCheck.allowed) {
     return {
       status: 'schedule_closed',
@@ -305,18 +776,7 @@ export function lookupStudentAvailableTokens(params: {
     };
   }
 
-  const availablePackages = params.packages.filter(
-    (p) =>
-      p.isPublished &&
-      (p.targetClasses.length === 0 ||
-        p.targetClasses.includes(student.className))
-  );
-
-  if (availablePackages.length === 0) {
-    return { status: 'no_exam', student };
-  }
-
-  return { status: 'ready', student, packages: availablePackages };
+  return { status: 'no_exam', student };
 }
 
 export function validateStudentLogin(params: {
@@ -364,19 +824,23 @@ export function validateStudentLogin(params: {
     };
   }
 
-  const scheduleCheck = isWithinScheduleWindow(params.schedule, params.now);
-  if (!scheduleCheck.allowed) {
-    return { ok: false, error: scheduleCheck.reason };
-  }
-
   const examPackage = params.packages.find(
     (p) => p.token.toUpperCase() === cleanToken && p.isPublished
   );
+  const scheduleCheck = isWithinScheduleWindow(params.schedule, params.now);
+
   if (!examPackage) {
+    if (!scheduleCheck.allowed) {
+      return { ok: false, error: scheduleCheck.reason };
+    }
     return {
       ok: false,
-      error: `Token ujian "${cleanToken}" tidak valid atau paket ujian belum dipublikasikan.`,
+      error: `Token ujian "${cleanToken}" tidak valid atau paket soal belum diaktifkan oleh guru mata pelajaran.`,
     };
+  }
+
+  if (!scheduleCheck.allowed && examPackage.allowIndependentAccess !== true) {
+    return { ok: false, error: scheduleCheck.reason };
   }
 
   if (
@@ -739,7 +1203,7 @@ export function parseQuestionsBulkText(
   const firstLineLower = lines[0]?.toLowerCase() || '';
   const looksTabular =
     (firstLineLower.startsWith('tipe') && firstLineLower.includes('pertanyaan')) ||
-    lines.some((l) => /^(pg|pgk|single|kompleks|bs|tf)\s*[|;\t,]/i.test(l));
+    lines.some((l) => /^(pg|pgk|single|kompleks|bs|tf|esai|essay)\s*[|;\t,]/i.test(l));
 
   if (!looksTabular) {
     const natural = parseNaturalBlockQuestions(cleanedRaw, packageId);
@@ -931,9 +1395,40 @@ export function parseQuestionsBulkText(
         explanation:
           expl || `Pernyataan tersebut bernilai ${correctBoolean ? 'Benar' : 'Salah'}.`,
       });
+    } else if (typeCode === 'ESAI' || typeCode === 'ESSAY') {
+      if (cols.length < 3) {
+        errors.push(
+          `Baris ${idx + 1}: Format ESAI membutuhkan minimal 3 kolom (ESAI | Pertanyaan | Kunci Jawaban | Kata Kunci? | Pembahasan?).`
+        );
+        return;
+      }
+      const prompt = cols[1] || '';
+      const answerKey = (cols[2] || '').trim();
+      if (!prompt || !answerKey) {
+        errors.push(`Baris ${idx + 1}: Pertanyaan atau Kunci Jawaban Esai kosong.`);
+        return;
+      }
+      const keywordsRaw = (cols[3] || '').trim();
+      const keywords = keywordsRaw
+        ? keywordsRaw
+            .split(/[;,]/)
+            .map((k) => k.trim())
+            .filter(Boolean)
+        : [];
+      const expl = (cols[4] || '').trim();
+      questions.push({
+        id: `q-imp-${Date.now()}-${idx}`,
+        packageId,
+        type: 'essay',
+        prompt,
+        essayAnswerKey: answerKey,
+        essayKeywords: keywords.length > 0 ? keywords : undefined,
+        points: 10,
+        explanation: expl || answerKey,
+      });
     } else {
       errors.push(
-        `Baris ${idx + 1}: Tipe soal "${cols[0]}" tidak dikenali (gunakan PG, PGK, atau BS).`
+        `Baris ${idx + 1}: Tipe soal "${cols[0]}" tidak dikenali (gunakan PG, PGK, BS, atau ESAI).`
       );
     }
   });
@@ -1131,35 +1626,94 @@ export interface CameraBehaviorInput {
   consecutiveTurnFrames: number;
   /** Consecutive frames where sustained voice/talking audio is detected */
   consecutiveSpeechFrames: number;
+  /** Optional vertical shift (-1 up .. +1 down) indicating looking down at notes/phone or up */
+  verticalShift?: number;
+  /** Optional eye/cheek yaw asymmetry score (-1 left .. +1 right) from landmarks or skin-half ratio */
+  eyeYawScore?: number;
+  /** Whether a human face is detected in the camera frame (defaults to true for legacy callers) */
+  faceDetected?: boolean;
+  /** Number of faces detected simultaneously (defaults to 1 when faceDetected is true) */
+  faceCount?: number;
+  /** Consecutive frames where face is missing or multiple faces appear */
+  consecutiveMissingFaceFrames?: number;
+  /** Consecutive frames where student is looking sharply down/up */
+  consecutiveVerticalFrames?: number;
 }
 
 export interface CameraBehaviorEvaluation {
-  status: 'focused' | 'looking_away' | 'talking';
+  status: 'focused' | 'looking_away' | 'looking_down' | 'no_face' | 'multiple_faces' | 'talking';
   nextTurnFrames: number;
   nextSpeechFrames: number;
+  nextMissingFaceFrames: number;
+  nextVerticalFrames: number;
   shouldFlagViolation: boolean;
   violationType?: string;
   violationDetail?: string;
 }
 
 /**
- * Pure heuristic evaluator for client-side webcam head-turn & microphone talking detection.
+ * Pure multi-signal evaluator for webcam face presence, head-turn yaw, looking down/up,
+ * multiple faces, and microphone talking detection.
  */
 export function evaluateCameraBehavior(
   input: CameraBehaviorInput
 ): CameraBehaviorEvaluation {
+  const faceDetected = input.faceDetected ?? true;
+  const faceCount = input.faceCount ?? (faceDetected ? 1 : 0);
+  const verticalShift = input.verticalShift ?? 0;
+  const eyeYawScore = input.eyeYawScore ?? 0;
+
+  const isMultipleFaces = faceCount > 1;
+  const isMissingFace = !faceDetected || faceCount === 0;
   const isLookingSideways =
-    Math.abs(input.horizontalShift) >= 0.24 || input.lateralMotionScore >= 0.22;
+    Math.abs(input.horizontalShift) >= 0.13 ||
+    Math.abs(eyeYawScore) >= 0.17 ||
+    input.lateralMotionScore >= 0.16;
+  const isLookingVertical = Math.abs(verticalShift) >= 0.16;
   const isTalking = input.audioRms >= 0.085;
 
+  const nextMissingFaceFrames =
+    isMissingFace || isMultipleFaces ? (input.consecutiveMissingFaceFrames ?? 0) + 1 : 0;
   const nextTurnFrames = isLookingSideways ? input.consecutiveTurnFrames + 1 : 0;
+  const nextVerticalFrames =
+    isLookingVertical && !isLookingSideways ? (input.consecutiveVerticalFrames ?? 0) + 1 : 0;
   const nextSpeechFrames = isTalking ? input.consecutiveSpeechFrames + 1 : 0;
+
+  if (isMultipleFaces && nextMissingFaceFrames >= 2) {
+    return {
+      status: 'multiple_faces',
+      nextTurnFrames: 0,
+      nextSpeechFrames: 0,
+      nextMissingFaceFrames: 0,
+      nextVerticalFrames: 0,
+      shouldFlagViolation: true,
+      violationType: 'Deteksi Kamera: Terdeteksi Lebih dari 1 Wajah',
+      violationDetail:
+        'Kamera pengawas mendeteksi lebih dari satu orang di depan layar ujian.',
+    };
+  }
+
+  if (isMissingFace && nextMissingFaceFrames >= 2) {
+    return {
+      status: 'no_face',
+      nextTurnFrames: 0,
+      nextSpeechFrames: 0,
+      nextMissingFaceFrames: 0,
+      nextVerticalFrames: 0,
+      shouldFlagViolation: true,
+      violationType: 'Deteksi Kamera: Wajah Tidak Terdeteksi',
+      violationDetail:
+        'Wajah peserta tidak terlihat di kamera pengawas atau kamera tertutup/menjauh.',
+    };
+  }
 
   if (nextSpeechFrames >= 3) {
     return {
       status: 'talking',
       nextTurnFrames: 0,
       nextSpeechFrames: 0,
+      nextMissingFaceFrames: 0,
+      nextVerticalFrames: 0,
       shouldFlagViolation: true,
       violationType: 'Deteksi Kamera & Audio: Terindikasi Mengobrol',
       violationDetail:
@@ -1167,22 +1721,54 @@ export function evaluateCameraBehavior(
     };
   }
 
-  if (nextTurnFrames >= 3) {
-    const dir = input.horizontalShift < 0 ? 'ke kiri' : 'ke kanan';
+  if (nextTurnFrames >= 2) {
+    const yawDir =
+      Math.abs(input.horizontalShift) >= Math.abs(eyeYawScore)
+        ? input.horizontalShift
+        : eyeYawScore;
+    const dir = yawDir < 0 ? 'ke kiri' : 'ke kanan';
     return {
       status: 'looking_away',
       nextTurnFrames: 0,
       nextSpeechFrames: 0,
+      nextMissingFaceFrames: 0,
+      nextVerticalFrames: 0,
       shouldFlagViolation: true,
       violationType: 'Deteksi Kamera: Melihat Kanan / Kiri',
       violationDetail: `Kamera pengawas mendeteksi pergerakan kepala menoleh ${dir} atau menjauh dari layar ujian.`,
     };
   }
 
+  if (nextVerticalFrames >= 2) {
+    const dir = verticalShift > 0 ? 'menunduk ke bawah' : 'melihat ke atas';
+    return {
+      status: 'looking_down',
+      nextTurnFrames: 0,
+      nextSpeechFrames: 0,
+      nextMissingFaceFrames: 0,
+      nextVerticalFrames: 0,
+      shouldFlagViolation: true,
+      violationType: 'Deteksi Kamera: Menunduk / Mengalihkan Pandangan',
+      violationDetail: `Kamera pengawas mendeteksi kepala peserta ${dir} menjauhi layar soal.`,
+    };
+  }
+
   return {
-    status: isTalking ? 'talking' : isLookingSideways ? 'looking_away' : 'focused',
+    status: isMultipleFaces
+      ? 'multiple_faces'
+      : isMissingFace
+      ? 'no_face'
+      : isTalking
+      ? 'talking'
+      : isLookingSideways
+      ? 'looking_away'
+      : isLookingVertical
+      ? 'looking_down'
+      : 'focused',
     nextTurnFrames,
     nextSpeechFrames,
+    nextMissingFaceFrames,
+    nextVerticalFrames,
     shouldFlagViolation: false,
   };
 }
@@ -1251,7 +1837,7 @@ export type WeightDistributionMode =
   | { mode: 'uniform'; pointsPerQuestion: number }
   | {
       mode: 'by_type';
-      weightsByType: Record<Question['type'], number>;
+      weightsByType: Partial<Record<Question['type'], number>>;
     };
 
 /**
@@ -1318,6 +1904,8 @@ export interface CollectiveQuestionPatch {
   correctOptionIds?: string[];
   correctBoolean?: boolean;
   options?: Question['options'];
+  essayAnswerKey?: string;
+  essayKeywords?: string[];
   packageId?: string;
 }
 
@@ -1359,6 +1947,14 @@ export function applyCollectiveQuestionEdits(
         patch.options !== undefined
           ? patch.options
           : q.options,
+      essayAnswerKey:
+        q.type === 'essay' && patch.essayAnswerKey !== undefined
+          ? patch.essayAnswerKey.trim()
+          : q.essayAnswerKey,
+      essayKeywords:
+        q.type === 'essay' && patch.essayKeywords !== undefined
+          ? patch.essayKeywords
+          : q.essayKeywords,
       packageId: patch.packageId || q.packageId,
     };
   });
@@ -1605,7 +2201,9 @@ function mirrorReadableSheets(ss, db) {
           ? (q.correctOptionIds || []).join(', ')
           : q.type === 'true_false'
             ? (q.correctBoolean ? 'BENAR' : 'SALAH')
-            : (q.matchingPairs || []).map(function (m) { return m.left + ' = ' + m.right; }).join(' | ');
+            : q.type === 'essay'
+              ? (q.essayAnswerKey || '')
+              : (q.matchingPairs || []).map(function (m) { return m.left + ' = ' + m.right; }).join(' | ');
       return [pkgMap[q.packageId] || q.packageId || '', q.type || '', q.points || 0, q.prompt || '', key, q.explanation || ''];
     })
   );
@@ -1941,6 +2539,187 @@ export function computeStudentExamProgress(params: {
     items,
   };
 }
+
+/**
+ * Normalizes potentially malformed attempt status strings arriving from remote sync or storage.
+ */
+export function normalizeAttemptStatus(rawStatus: unknown): StudentAttemptStatus {
+  const cleaned = String(rawStatus ?? '')
+    .trim()
+    .toLowerCase();
+  if (cleaned === 'locked' || cleaned === 'terkunci') return 'locked';
+  if (cleaned === 'completed' || cleaned === 'selesai') return 'completed';
+  if (cleaned === 'in_progress' || cleaned === 'mengerjakan') return 'in_progress';
+  return 'not_started';
+}
+
+/**
+ * Determines reliably whether an attempt is locked due to proctoring violations.
+ * Prevents a locked student from ever being misclassified as `in_progress` (which would show "+5 Menit" instead of "Buka Kunci").
+ */
+export function isAttemptViolationLocked(
+  attempt: ExamAttempt | undefined,
+  maxViolationTolerance = 3
+): boolean {
+  if (!attempt) return false;
+  const normalized = normalizeAttemptStatus(attempt.status);
+  if (normalized === 'locked') return true;
+  if (typeof attempt.lockReason === 'string' && attempt.lockReason.trim().length > 0) {
+    return true;
+  }
+  const safeLimit = Math.max(1, Math.min(5, Number(maxViolationTolerance) || 3));
+  const violations = Math.max(0, Number(attempt.violationCount) || 0);
+  if (normalized !== 'completed' && violations > safeLimit) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Resolves the authoritative UI status for a student's attempt row across proctoring & student portals.
+ */
+export function resolveEffectiveAttemptStatus(
+  attempt: ExamAttempt | undefined,
+  maxViolationTolerance = 3
+): StudentAttemptStatus {
+  if (!attempt) return 'not_started';
+  if (isAttemptViolationLocked(attempt, maxViolationTolerance)) {
+    return 'locked';
+  }
+  return normalizeAttemptStatus(attempt.status);
+}
+
+function getAttemptTimestampMs(attempt: ExamAttempt): number {
+  const candidates = [attempt.updatedAt, attempt.unlockedAt, attempt.submittedAt, attempt.startedAt];
+  let best = 0;
+  for (const iso of candidates) {
+    if (!iso) continue;
+    const ms = Date.parse(iso);
+    if (Number.isFinite(ms) && ms > best) best = ms;
+  }
+  return best;
+}
+
+/**
+ * Finds the best matching attempt for a student in a given exam package.
+ * Matches by studentId OR studentNisn (handling cross-device re-imports cleanly) and
+ * prioritizes locked > in_progress > completed > most recent if duplicate records exist.
+ */
+export function findStudentPackageAttempt(
+  attempts: ExamAttempt[],
+  student: Pick<StudentRecord, 'id' | 'nisn'>,
+  packageId: string,
+  maxViolationTolerance = 3
+): ExamAttempt | undefined {
+  const cleanNisn = student.nisn.trim();
+  const matches = attempts.filter(
+    (a) =>
+      a.packageId === packageId &&
+      (a.studentId === student.id || (cleanNisn.length > 0 && a.studentNisn.trim() === cleanNisn))
+  );
+  if (matches.length <= 1) return matches[0];
+
+  const priority = (attempt: ExamAttempt): number => {
+    const status = resolveEffectiveAttemptStatus(attempt, maxViolationTolerance);
+    if (status === 'locked') return 3;
+    if (status === 'in_progress') return 2;
+    if (status === 'completed') return 1;
+    return 0;
+  };
+
+  return [...matches].sort((a, b) => {
+    const pDiff = priority(b) - priority(a);
+    if (pDiff !== 0) return pDiff;
+    return getAttemptTimestampMs(b) - getAttemptTimestampMs(a);
+  })[0];
+}
+
+/**
+ * Ensures that when a teacher unlocks a student whose exam timer expired while locked,
+ * enough extra minutes are granted so the student is not immediately auto-submitted on resume.
+ */
+export function computeUnlockExtraMinutes(
+  attempt: Pick<ExamAttempt, 'startedAt' | 'extraMinutes'>,
+  durationMinutes: number,
+  nowMs: number = Date.now(),
+  minimumResumeMinutes = 10
+): number {
+  const safeExtra = Math.max(0, Number(attempt.extraMinutes) || 0);
+  const safeDuration = Math.max(1, Number(durationMinutes) || 60);
+  const totalSec = (safeDuration + safeExtra) * 60;
+  const startedMs = new Date(attempt.startedAt).getTime();
+  const elapsedSec = Number.isFinite(startedMs)
+    ? Math.max(0, Math.floor((nowMs - startedMs) / 1000))
+    : 0;
+  const rawRemainingSec = totalSec - elapsedSec;
+  const minResumeSec = Math.min(safeDuration, Math.max(5, minimumResumeMinutes)) * 60;
+  if (rawRemainingSec >= minResumeSec) {
+    return safeExtra;
+  }
+  const deficitMinutes = Math.ceil((minResumeSec - rawRemainingSec) / 60);
+  return safeExtra + deficitMinutes;
+}
+
+/**
+ * Merges local and remote exam attempts safely during background sync so concurrent multi-device
+ * updates never clobber a newer teacher unlock or a newer student violation lock.
+ */
+export function mergeExamAttempts(
+  localAttempts: ExamAttempt[],
+  remoteAttempts: ExamAttempt[],
+  maxViolationTolerance = 3
+): ExamAttempt[] {
+  const keyOf = (a: ExamAttempt) =>
+    `${a.packageId}::${a.studentNisn.trim() || a.studentId}`;
+
+  const mergedMap = new Map<string, ExamAttempt>();
+
+  for (const remote of remoteAttempts) {
+    mergedMap.set(keyOf(remote), remote);
+  }
+
+  for (const local of localAttempts) {
+    const key = keyOf(local);
+    const remote = mergedMap.get(key);
+    if (!remote) {
+      mergedMap.set(key, local);
+      continue;
+    }
+
+    const localTs = getAttemptTimestampMs(local);
+    const remoteTs = getAttemptTimestampMs(remote);
+    const localUnlockedTs = local.unlockedAt ? Date.parse(local.unlockedAt) : 0;
+    const remoteUnlockedTs = remote.unlockedAt ? Date.parse(remote.unlockedAt) : 0;
+    const localLocked = isAttemptViolationLocked(local, maxViolationTolerance);
+    const remoteLocked = isAttemptViolationLocked(remote, maxViolationTolerance);
+
+    // If one side has a newer explicit teacher unlock timestamp than the other side's latest timestamp, keep the unlock
+    if (localUnlockedTs > 0 && localUnlockedTs >= remoteTs && !localLocked) {
+      mergedMap.set(key, local);
+      continue;
+    }
+    if (remoteUnlockedTs > 0 && remoteUnlockedTs >= localTs && !remoteLocked) {
+      mergedMap.set(key, remote);
+      continue;
+    }
+
+    // Otherwise prefer whichever record has the newer timestamp; tie-break by richer progress / locked status
+    if (localTs > remoteTs) {
+      mergedMap.set(key, local);
+    } else if (remoteTs > localTs) {
+      mergedMap.set(key, remote);
+    } else if (localLocked !== remoteLocked) {
+      mergedMap.set(key, remoteLocked ? remote : local);
+    } else {
+      const localAnswered = Object.keys(local.answers || {}).length;
+      const remoteAnswered = Object.keys(remote.answers || {}).length;
+      mergedMap.set(key, localAnswered > remoteAnswered ? local : remote);
+    }
+  }
+
+  return Array.from(mergedMap.values());
+}
+
 
 
 

@@ -42,11 +42,16 @@ export function GlobalSecuritySettings() {
       | 'requireFullscreen'
       | 'requireCameraMonitoring'
       | 'detectTabSwitchAndSplitScreen'
+      | 'detectNotificationBarAndScreenshot'
       | 'blockRightClickAndCopyPaste'
       | 'enableDynamicWatermark'
       | 'showScoreAndExplanationAuto'
   ) => {
-    updateSecurityConfig({ ...sec, [key]: !sec[key] });
+    const currentVal =
+      key === 'detectNotificationBarAndScreenshot'
+        ? sec.detectNotificationBarAndScreenshot !== false
+        : Boolean(sec[key]);
+    updateSecurityConfig({ ...sec, [key]: !currentVal });
     setNotice('Kebijakan keamanan global diperbarui secara dinamis.');
   };
 
@@ -93,6 +98,7 @@ export function GlobalSecuritySettings() {
       | 'requireFullscreen'
       | 'requireCameraMonitoring'
       | 'detectTabSwitchAndSplitScreen'
+      | 'detectNotificationBarAndScreenshot'
       | 'blockRightClickAndCopyPaste'
       | 'enableDynamicWatermark'
       | 'showScoreAndExplanationAuto';
@@ -102,9 +108,9 @@ export function GlobalSecuritySettings() {
   }> = [
     {
       key: 'requireCameraMonitoring',
-      title: 'Wajib Aktifkan Kamera & Mikrofon Pengawas',
+      title: 'Wajib Aktifkan Kamera, Pelacakan Wajah & Suara Teguran',
       description:
-        'Memantau pergerakan siswa secara langsung melalui kamera dan audio perangkat. Jika terdeteksi menoleh kanan/kiri berulang atau mengobrol, otomatis tercatat sebagai pelanggaran.',
+        'Memantau posisi wajah, arah pandangan (menoleh kanan/kiri/menunduk), keberadaan >1 orang, serta percakapan melalui mikrofon. Pelanggaran langsung ditegur dengan suara perempuan.',
       highlightCamera: true,
     },
     {
@@ -120,10 +126,16 @@ export function GlobalSecuritySettings() {
         'Mendeteksi perpindahan tab browser, kehilangan fokus aplikasi, serta penyusutan ukuran layar (Split Screen / Floating Window HP).',
     },
     {
+      key: 'detectNotificationBarAndScreenshot',
+      title: 'Larangan Bilah Notifikasi (HP/Tablet) & Proteksi Screenshot',
+      description:
+        'Mendeteksi gestur menarik bilah notifikasi di HP/tablet, kehilangan fokus sistem, serta langsung menutup layar dengan tirai hitam saat terdeteksi tombol atau kombinasi tangkapan layar (Screenshot / PrintScreen / Win+Shift+S / Cmd+Shift+3/4).',
+    },
+    {
       key: 'blockRightClickAndCopyPaste',
       title: 'Blokir Klik Kanan, Copy-Paste & Inspeksi DevTools',
       description:
-        'Menonaktifkan klik kanan, seleksi teks, drag-and-drop, Ctrl+C/V/X/A/P/S/U, F12, Ctrl+Shift+I/J/C, dan proteksi layar saat tombol PrintScreen ditekan.',
+        'Menonaktifkan klik kanan, seleksi teks, drag-and-drop, Ctrl+C/V/X/P/S/U, F12, dan Ctrl+Shift+I/J/C.',
     },
     {
       key: 'enableDynamicWatermark',
@@ -254,7 +266,10 @@ export function GlobalSecuritySettings() {
 
           <div className="divide-y divide-slate-100 dark:divide-slate-800">
             {toggles.map((item) => {
-              const checked = sec[item.key];
+              const checked =
+                item.key === 'detectNotificationBarAndScreenshot'
+                  ? sec.detectNotificationBarAndScreenshot !== false
+                  : Boolean(sec[item.key]);
               return (
                 <div
                   key={item.key}

@@ -71,6 +71,7 @@ export default async function handler(req: Request): Promise<Response> {
     action,
     secret,
     database: body.database,
+    timeoutMs: 8500,
   });
 
   return new Response(JSON.stringify(result.body), {

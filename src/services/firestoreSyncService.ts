@@ -19,6 +19,7 @@ import {
   handleFirestoreError,
   OperationType,
 } from '../lib/firebase';
+import firebaseConfig from '../../firebase-applet-config.json';
 import type {
   CBTDatabase,
   ExamPackage,
@@ -572,6 +573,57 @@ export function subscribeToUserSnapshot(
   };
 }
 
+function decodeFirestoreRestValue(val: Record<string, unknown> | undefined): unknown {
+  if (!val || typeof val !== 'object') return undefined;
+  if ('stringValue' in val) return String(val.stringValue ?? '');
+  if ('booleanValue' in val) return Boolean(val.booleanValue);
+  if ('integerValue' in val) return Number(val.integerValue ?? 0);
+  if ('doubleValue' in val) return Number(val.doubleValue ?? 0);
+  if ('timestampValue' in val) {
+    const iso = String(val.timestampValue ?? '');
+    const d = new Date(iso);
+    return Number.isFinite(d.getTime()) ? { toDate: () => d } : null;
+  }
+  if ('arrayValue' in val && val.arrayValue && typeof val.arrayValue === 'object') {
+    const arr = (val.arrayValue as { values?: Array<Record<string, unknown>> }).values;
+    return Array.isArray(arr) ? arr.map((item) => decodeFirestoreRestValue(item)) : [];
+  }
+  return undefined;
+}
+
+/**
+ * Direct HTTPS REST read of `/school_portal/sman1kabun_live` (no WebChannel, no Google login).
+ * Used as an immediate bootstrap & fallback so Netlify devices on restricted school networks connect automatically.
+ */
+export async function fetchPublicSchoolPortalOnce(): Promise<CloudSnapshotSummary | null> {
+  if (typeof fetch !== 'function') return null;
+  try {
+    const projectId = firebaseConfig.projectId;
+    const databaseId = firebaseConfig.firestoreDatabaseId || '(default)';
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      projectId
+    )}/databases/${encodeURIComponent(databaseId)}/documents/school_portal/${encodeURIComponent(
+      PUBLIC_SCHOOL_PORTAL_ID
+    )}`;
+    const resp = await fetch(endpoint, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as {
+      fields?: Record<string, Record<string, unknown>>;
+    };
+    if (!json.fields || typeof json.fields !== 'object') return null;
+    const decoded: Record<string, unknown> = {};
+    for (const [key, rawVal] of Object.entries(json.fields)) {
+      decoded[key] = decodeFirestoreRestValue(rawVal);
+    }
+    return parseSnapshotSummaryDoc(PUBLIC_SCHOOL_PORTAL_ID, decoded);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Subscribes to the non-PII public school portal document (`/school_portal/sman1kabun_live`)
  * so any shared device connects automatically on boot WITHOUT requiring Google Sign-In.
@@ -584,13 +636,22 @@ export function subscribeToPublicSchoolPortal(
   const portalRef = doc(firestoreDb, 'school_portal', PUBLIC_SCHOOL_PORTAL_ID);
 
   let disposed = false;
+  let receivedFromSdk = false;
   let innerUnsub: Unsubscribe | null = null;
+
+  // Immediate REST bootstrap guarantees zero-login hydration on Netlify even if WebChannel lags
+  void fetchPublicSchoolPortalOnce().then((restSummary) => {
+    if (!disposed && !receivedFromSdk && restSummary) {
+      onData(restSummary);
+    }
+  });
 
   void firestorePersistenceReady.then(() => {
     if (disposed) return;
     innerUnsub = onSnapshot(
       portalRef,
       (snap) => {
+        receivedFromSdk = true;
         if (!snap.exists()) {
           onData(null);
           return;
