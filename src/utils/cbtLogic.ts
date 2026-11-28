@@ -1652,31 +1652,42 @@ export interface CameraBehaviorEvaluation {
 }
 
 /**
- * Pure multi-signal evaluator for webcam face presence, head-turn yaw, looking down/up,
- * multiple faces, and microphone talking detection.
+ * Pure multi-signal evaluator for webcam face presence, deliberate sideways head-turns
+ * (menolehkan wajah ke kanan/kiri), multiple faces, and microphone talking detection.
+ *
+ * Calibrated for phones, tablets, and laptops where the camera sits above the screen:
+ * looking down toward the screen or subtle eye glances while the face remains visible
+ * are NOT treated as violations.
  */
 export function evaluateCameraBehavior(
   input: CameraBehaviorInput
 ): CameraBehaviorEvaluation {
   const faceDetected = input.faceDetected ?? true;
   const faceCount = input.faceCount ?? (faceDetected ? 1 : 0);
-  const verticalShift = input.verticalShift ?? 0;
   const eyeYawScore = input.eyeYawScore ?? 0;
 
   const isMultipleFaces = faceCount > 1;
   const isMissingFace = !faceDetected || faceCount === 0;
-  const isLookingSideways =
-    Math.abs(input.horizontalShift) >= 0.13 ||
-    Math.abs(eyeYawScore) >= 0.17 ||
-    input.lateralMotionScore >= 0.16;
-  const isLookingVertical = Math.abs(verticalShift) >= 0.16;
-  const isTalking = input.audioRms >= 0.085;
+
+  // Require an unmistakable head/face turn to the left or right (looking at a neighbor),
+  // rather than subtle eye glances, typing hand movement, or slight posture shifts.
+  const absHorizontal = Math.abs(input.horizontalShift);
+  const absYaw = Math.abs(eyeYawScore);
+  const isTurningHeadSideways =
+    faceDetected &&
+    faceCount === 1 &&
+    (absHorizontal >= 0.32 ||
+      absYaw >= 0.44 ||
+      (absYaw >= 0.34 && (absHorizontal >= 0.16 || input.lateralMotionScore >= 0.22)) ||
+      (input.lateralMotionScore >= 0.36 && (absHorizontal >= 0.18 || absYaw >= 0.28)));
+
+  const isTalking = input.audioRms >= 0.09;
 
   const nextMissingFaceFrames =
     isMissingFace || isMultipleFaces ? (input.consecutiveMissingFaceFrames ?? 0) + 1 : 0;
-  const nextTurnFrames = isLookingSideways ? input.consecutiveTurnFrames + 1 : 0;
-  const nextVerticalFrames =
-    isLookingVertical && !isLookingSideways ? (input.consecutiveVerticalFrames ?? 0) + 1 : 0;
+  const nextTurnFrames = isTurningHeadSideways ? input.consecutiveTurnFrames + 1 : 0;
+  // Looking down toward a laptop/tablet/phone screen beneath a top camera is normal — never flag.
+  const nextVerticalFrames = 0;
   const nextSpeechFrames = isTalking ? input.consecutiveSpeechFrames + 1 : 0;
 
   if (isMultipleFaces && nextMissingFaceFrames >= 2) {
@@ -1693,7 +1704,7 @@ export function evaluateCameraBehavior(
     };
   }
 
-  if (isMissingFace && nextMissingFaceFrames >= 2) {
+  if (isMissingFace && nextMissingFaceFrames >= 3) {
     return {
       status: 'no_face',
       nextTurnFrames: 0,
@@ -1721,11 +1732,8 @@ export function evaluateCameraBehavior(
     };
   }
 
-  if (nextTurnFrames >= 2) {
-    const yawDir =
-      Math.abs(input.horizontalShift) >= Math.abs(eyeYawScore)
-        ? input.horizontalShift
-        : eyeYawScore;
+  if (nextTurnFrames >= 3) {
+    const yawDir = absHorizontal >= absYaw ? input.horizontalShift : eyeYawScore;
     const dir = yawDir < 0 ? 'ke kiri' : 'ke kanan';
     return {
       status: 'looking_away',
@@ -1734,22 +1742,8 @@ export function evaluateCameraBehavior(
       nextMissingFaceFrames: 0,
       nextVerticalFrames: 0,
       shouldFlagViolation: true,
-      violationType: 'Deteksi Kamera: Melihat Kanan / Kiri',
-      violationDetail: `Kamera pengawas mendeteksi pergerakan kepala menoleh ${dir} atau menjauh dari layar ujian.`,
-    };
-  }
-
-  if (nextVerticalFrames >= 2) {
-    const dir = verticalShift > 0 ? 'menunduk ke bawah' : 'melihat ke atas';
-    return {
-      status: 'looking_down',
-      nextTurnFrames: 0,
-      nextSpeechFrames: 0,
-      nextMissingFaceFrames: 0,
-      nextVerticalFrames: 0,
-      shouldFlagViolation: true,
-      violationType: 'Deteksi Kamera: Menunduk / Mengalihkan Pandangan',
-      violationDetail: `Kamera pengawas mendeteksi kepala peserta ${dir} menjauhi layar soal.`,
+      violationType: 'Deteksi Kamera: Wajah Menoleh Kanan / Kiri',
+      violationDetail: `Kamera pengawas mendeteksi wajah peserta menoleh jelas ${dir} menjauhi layar ujian.`,
     };
   }
 
@@ -1760,10 +1754,8 @@ export function evaluateCameraBehavior(
       ? 'no_face'
       : isTalking
       ? 'talking'
-      : isLookingSideways
+      : isTurningHeadSideways
       ? 'looking_away'
-      : isLookingVertical
-      ? 'looking_down'
       : 'focused',
     nextTurnFrames,
     nextSpeechFrames,

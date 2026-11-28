@@ -45,7 +45,7 @@ export const VIOLATION_CATEGORIES: Record<ViolationCategoryId, ViolationCategory
   },
   head_gaze_away: {
     id: 'head_gaze_away',
-    label: 'Menoleh / Mengalihkan Pandangan',
+    label: 'Wajah Menoleh Kanan / Kiri',
     shortLabel: 'Menoleh',
     englishTag: 'Looking away',
     severity: 'medium',

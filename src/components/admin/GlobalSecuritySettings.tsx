@@ -110,7 +110,7 @@ export function GlobalSecuritySettings() {
       key: 'requireCameraMonitoring',
       title: 'Wajib Aktifkan Kamera, Pelacakan Wajah & Suara Teguran',
       description:
-        'Memantau posisi wajah, arah pandangan (menoleh kanan/kiri/menunduk), keberadaan >1 orang, serta percakapan melalui mikrofon. Pelanggaran langsung ditegur dengan suara perempuan.',
+        'Memantau keberadaan wajah di layar, gerakan wajah menoleh ke samping kanan/kiri, keberadaan >1 orang, serta percakapan melalui mikrofon (pandangan normal ke layar/menunduk tidak dianggap pelanggaran). Pelanggaran langsung ditegur dengan suara perempuan.',
       highlightCamera: true,
     },
     {

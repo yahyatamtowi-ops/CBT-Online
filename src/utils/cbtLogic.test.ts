@@ -309,10 +309,11 @@ test('evaluateViolationEscalation locks exam once violations exceed tolerance', 
   assert.equal(evaluateViolationEscalation(3, sec).shouldAutoLock, true);
 });
 
-test('evaluateCameraBehavior detects sustained looking left/right and talking violations', () => {
+test('evaluateCameraBehavior detects sustained sideways head turn and talking violations without flagging minor glances', () => {
   const focused = evaluateCameraBehavior({
-    horizontalShift: 0.05,
-    lateralMotionScore: 0.04,
+    horizontalShift: 0.14,
+    eyeYawScore: -0.22,
+    lateralMotionScore: 0.16,
     audioRms: 0.01,
     consecutiveTurnFrames: 0,
     consecutiveSpeechFrames: 0,
@@ -321,14 +322,14 @@ test('evaluateCameraBehavior detects sustained looking left/right and talking vi
   assert.equal(focused.shouldFlagViolation, false);
 
   const lookingRight = evaluateCameraBehavior({
-    horizontalShift: 0.32,
+    horizontalShift: 0.34,
     lateralMotionScore: 0.25,
     audioRms: 0.01,
     consecutiveTurnFrames: 2,
     consecutiveSpeechFrames: 0,
   });
   assert.equal(lookingRight.shouldFlagViolation, true);
-  assert.match(lookingRight.violationType ?? '', /Melihat Kanan/i);
+  assert.match(lookingRight.violationType ?? '', /Menoleh Kanan/i);
 
   const talking = evaluateCameraBehavior({
     horizontalShift: 0.02,
@@ -1483,11 +1484,41 @@ test('teacher-activated packages (allowIndependentAccess) bypass admin schedule 
   assert.equal(login.examPackage?.id, 'pkg-uts-guru');
 });
 
-test('upgraded evaluateCameraBehavior detects eyeYaw, looking down, missing face, and multiple faces', () => {
-  const yawStep1 = evaluateCameraBehavior({
+test('calibrated evaluateCameraBehavior ignores looking down and eye glances, while catching clear head turns, missing face, and multiple faces', () => {
+  // Subtle eye glance / small natural posture shift stays focused
+  const subtleGlance = evaluateCameraBehavior({
+    horizontalShift: 0.15,
+    eyeYawScore: -0.25,
+    lateralMotionScore: 0.18,
+    audioRms: 0.01,
+    consecutiveTurnFrames: 2,
+    consecutiveSpeechFrames: 0,
+  });
+  assert.equal(subtleGlance.status, 'focused');
+  assert.equal(subtleGlance.shouldFlagViolation, false);
+  assert.equal(subtleGlance.nextTurnFrames, 0);
+
+  // Looking down toward tablet/laptop/phone screen beneath top camera stays focused
+  const lookDownAtScreen = evaluateCameraBehavior({
     horizontalShift: 0.04,
-    eyeYawScore: -0.22,
+    verticalShift: 0.42,
     lateralMotionScore: 0.05,
+    audioRms: 0.01,
+    faceDetected: true,
+    faceCount: 1,
+    consecutiveTurnFrames: 0,
+    consecutiveSpeechFrames: 0,
+    consecutiveVerticalFrames: 4,
+  });
+  assert.equal(lookDownAtScreen.status, 'focused');
+  assert.equal(lookDownAtScreen.shouldFlagViolation, false);
+  assert.equal(lookDownAtScreen.nextVerticalFrames, 0);
+
+  // Deliberate sustained head turn left triggers violation on 3rd consecutive frame
+  const yawStep1 = evaluateCameraBehavior({
+    horizontalShift: -0.18,
+    eyeYawScore: -0.46,
+    lateralMotionScore: 0.12,
     audioRms: 0.01,
     consecutiveTurnFrames: 0,
     consecutiveSpeechFrames: 0,
@@ -1497,29 +1528,29 @@ test('upgraded evaluateCameraBehavior detects eyeYaw, looking down, missing face
   assert.equal(yawStep1.nextTurnFrames, 1);
 
   const yawStep2 = evaluateCameraBehavior({
-    horizontalShift: 0.04,
-    eyeYawScore: -0.22,
-    lateralMotionScore: 0.05,
+    horizontalShift: -0.18,
+    eyeYawScore: -0.46,
+    lateralMotionScore: 0.12,
     audioRms: 0.01,
     consecutiveTurnFrames: yawStep1.nextTurnFrames,
     consecutiveSpeechFrames: 0,
   });
-  assert.equal(yawStep2.shouldFlagViolation, true);
-  assert.match(yawStep2.violationDetail ?? '', /ke kiri/i);
+  assert.equal(yawStep2.shouldFlagViolation, false);
+  assert.equal(yawStep2.nextTurnFrames, 2);
 
-  const lookDown = evaluateCameraBehavior({
-    horizontalShift: 0.01,
-    verticalShift: 0.24,
-    lateralMotionScore: 0.02,
+  const yawStep3 = evaluateCameraBehavior({
+    horizontalShift: -0.18,
+    eyeYawScore: -0.46,
+    lateralMotionScore: 0.12,
     audioRms: 0.01,
-    consecutiveTurnFrames: 0,
+    consecutiveTurnFrames: yawStep2.nextTurnFrames,
     consecutiveSpeechFrames: 0,
-    consecutiveVerticalFrames: 1,
   });
-  assert.equal(lookDown.status, 'looking_down');
-  assert.equal(lookDown.shouldFlagViolation, true);
-  assert.match(lookDown.violationType ?? '', /Menunduk/i);
+  assert.equal(yawStep3.shouldFlagViolation, true);
+  assert.match(yawStep3.violationType ?? '', /Wajah Menoleh Kanan \/ Kiri/i);
+  assert.match(yawStep3.violationDetail ?? '', /ke kiri/i);
 
+  // Missing face triggers on 3rd consecutive frame
   const noFace = evaluateCameraBehavior({
     horizontalShift: 0,
     lateralMotionScore: 0,
@@ -1528,12 +1559,13 @@ test('upgraded evaluateCameraBehavior detects eyeYaw, looking down, missing face
     faceCount: 0,
     consecutiveTurnFrames: 0,
     consecutiveSpeechFrames: 0,
-    consecutiveMissingFaceFrames: 1,
+    consecutiveMissingFaceFrames: 2,
   });
   assert.equal(noFace.status, 'no_face');
   assert.equal(noFace.shouldFlagViolation, true);
   assert.match(noFace.violationType ?? '', /Wajah Tidak Terdeteksi/i);
 
+  // Multiple faces triggers on 2nd consecutive frame
   const multiFace = evaluateCameraBehavior({
     horizontalShift: 0,
     lateralMotionScore: 0,

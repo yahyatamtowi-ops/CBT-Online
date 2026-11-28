@@ -768,7 +768,7 @@ export function ExamWorkspace({
 
                   if (prevLumaRef.current) {
                     const diff = Math.abs(luma - prevLumaRef.current[pIdx]);
-                    if (diff > 20) {
+                    if (diff > 28) {
                       if (x < W / 2) leftDiff += 1;
                       else rightDiff += 1;
                     }
@@ -884,13 +884,23 @@ export function ExamWorkspace({
                     -1,
                     Math.min(1, balanceNorm - baselineBalanceRef.current)
                   );
+                  // Gently adapt baseline only during small natural posture shifts
+                  if (
+                    Math.abs(horizontalShift) < 0.16 &&
+                    Math.abs(eyeYawScore) < 0.18
+                  ) {
+                    baselineCentroidXRef.current =
+                      baselineCentroidXRef.current * 0.98 + cxNorm * 0.02;
+                    baselineBalanceRef.current =
+                      baselineBalanceRef.current * 0.98 + balanceNorm * 0.02;
+                  }
                 }
               }
 
               if (regionPixels > 0) {
                 const totalMoved = leftDiff + rightDiff;
                 const asymmetry = Math.abs(leftDiff - rightDiff) / (regionPixels * 0.42);
-                lateralMotionScore = totalMoved > 55 ? Math.min(1, asymmetry * 1.55) : 0;
+                lateralMotionScore = totalMoved > 85 ? Math.min(1, asymmetry * 1.4) : 0;
               }
             }
 
@@ -1049,13 +1059,11 @@ export function ExamWorkspace({
         ? '>1 Wajah!'
         : cameraBehaviorStatus === 'no_face'
           ? 'Wajah Hilang!'
-          : cameraBehaviorStatus === 'looking_down'
-            ? 'Menunduk!'
-            : cameraBehaviorStatus === 'talking'
-              ? 'Suara Terdeteksi'
-              : cameraBehaviorStatus === 'looking_away'
-                ? 'Menoleh!'
-                : 'Wajah Fokus';
+          : cameraBehaviorStatus === 'talking'
+            ? 'Suara Terdeteksi'
+            : cameraBehaviorStatus === 'looking_away'
+              ? 'Wajah Menoleh!'
+              : 'Wajah Fokus';
 
   return (
     <div
